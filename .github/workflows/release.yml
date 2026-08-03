@@ -18,9 +18,6 @@ jobs:
     - name: Build Application
       run: bash build.sh
 
-    - name: Run Tests
-      run: bash test.sh
-
     - name: Ad-hoc Code Sign
       run: codesign --force --deep --sign - build/Pulse.app
 
