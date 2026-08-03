@@ -53,6 +53,8 @@
   └─────────────────────────┘
   退出 Pulse                 ⌘Q
 ```
+<img width="349" height="402" alt="image" src="https://github.com/user-attachments/assets/b2e95577-8ab7-4c3e-aa91-8bdb4df0f6eb" />
+
 
 *详情面板支持点击外部自动隐藏、深色/浅色模式无缝切换。*
 
