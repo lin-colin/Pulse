@@ -56,6 +56,7 @@
 🌡 30.3 °C 🖥 38% 2.4G
 ```
 <img width="149" height="39" alt="image" src="https://github.com/user-attachments/assets/6ba86ef4-1b11-4353-bb3b-2fcdb9f2139e" />
+<img width="135" height="39" alt="image" src="https://github.com/user-attachments/assets/840f73ff-6523-47c4-9c5d-ea973d26a896" />
 
 
 ### 原生详情面板 (Native Detail Panel)
