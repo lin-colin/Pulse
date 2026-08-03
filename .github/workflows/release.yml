@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Swift
+      uses: swift-actions/setup-swift@v2
+      with:
+        swift-version: '5.9'
+
+    - name: Build Application
+      run: bash build.sh
+
+    - name: Run Tests
+      run: bash test.sh
+
+    - name: Ad-hoc Code Sign
+      run: codesign --force --deep --sign - build/Pulse.app
+
+    - name: Package ZIP
+      run: |
+        cd build
+        zip -r ../Pulse_macOS.zip Pulse.app
+        cd ..
+
+    - name: Extract Version from Tag
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: "Pulse ${{ steps.version.outputs.VERSION }}"
+        body: |
+          ## Pulse ${{ steps.version.outputs.VERSION }}
+
+          ### 安装方式 (Installation)
+          1. 下载下方的 `Pulse_macOS.zip`
+          2. 解压后将 `Pulse.app` 拖入「应用程序」文件夹
+          3. 双击运行即可
+
+          > **系统要求**: macOS 13.0 (Ventura) 及以上
+
+          详细更新内容请查看 [CHANGELOG.md](https://github.com/lin-colin/Pulse/blob/main/CHANGELOG.md)
+        files: Pulse_macOS.zip
+        draft: false
+        prerelease: false
