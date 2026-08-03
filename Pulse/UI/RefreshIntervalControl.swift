@@ -60,14 +60,15 @@ final class RefreshIntervalControl: NSView {
                 yRadius: 8
             ).fill()
         } else {
-            let circleSize = min(bounds.height - 2, 30)
-            let circleRect = NSRect(
-                x: bounds.maxX - circleSize - 1,
-                y: bounds.midY - circleSize / 2,
-                width: circleSize,
-                height: circleSize
+            // 非悬浮状态：仅在右侧箭头区域绘制小圆形背景，文字部分保持透明。
+            let chevronSize: CGFloat = min(bounds.height - 4, 22)
+            let chevronRect = NSRect(
+                x: bounds.maxX - chevronSize - 2,
+                y: bounds.midY - chevronSize / 2,
+                width: chevronSize,
+                height: chevronSize
             )
-            NSBezierPath(ovalIn: circleRect).fill()
+            NSBezierPath(ovalIn: chevronRect).fill()
         }
     }
 

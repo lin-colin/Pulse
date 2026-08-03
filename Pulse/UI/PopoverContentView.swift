@@ -309,12 +309,13 @@ final class PopoverContentView: NSView {
             height: Layout.controlRowHeight
         )
         if let refreshRow {
-            layoutStandardRowSubviews(refreshRow, trailingWidth: 92)
+            layoutStandardRowSubviews(refreshRow, trailingWidth: 68)
+            let controlHeight: CGFloat = 26
             refreshControl.frame = NSRect(
-                x: refreshRow.bounds.width - 104,
-                y: (refreshRow.bounds.height - 32) / 2,
-                width: 92,
-                height: 32
+                x: refreshRow.bounds.width - 68 - Layout.trailingInset,
+                y: (refreshRow.bounds.height - controlHeight) / 2,
+                width: 68,
+                height: controlHeight
             )
         }
         if let launchRow {

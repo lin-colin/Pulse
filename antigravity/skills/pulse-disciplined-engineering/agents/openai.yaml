@@ -1,4 +1,0 @@
-interface:
-  display_name: "Pulse Disciplined Engineering"
-  short_description: "Evidence-first engineering for Pulse"
-  default_prompt: "Use $pulse-disciplined-engineering to handle this Pulse task with evidence before changes."

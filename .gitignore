@@ -16,5 +16,15 @@ DerivedData/
 *.mode2v3
 *.perspectivev3
 *.pbxuser
+
+# Release artifacts
 release/
 test_bin
+
+# AI/Agent tool artifacts (local development only)
+.superpowers/
+antigravity/
+docs/superpowers/
+
+# Source image files (icns is kept)
+Pulse/Resources/*.png

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Pulse Hardware Monitoring"
-  short_description: "Build and verify truthful macOS hardware metrics in Pulse."
-  default_prompt: "Use this skill to analyze, implement, or verify Pulse hardware metrics without misleading users."
