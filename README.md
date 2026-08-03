@@ -34,6 +34,8 @@
 ⚡ 5.3 W  📊 9 %
 🌡 30.3 °C 🖥 38% 2.4G
 ```
+<img width="149" height="39" alt="image" src="https://github.com/user-attachments/assets/6ba86ef4-1b11-4353-bb3b-2fcdb9f2139e" />
+
 
 ### 原生详情面板 (Native Detail Panel)
 
