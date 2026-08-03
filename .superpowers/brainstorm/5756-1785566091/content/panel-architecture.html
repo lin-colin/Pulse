@@ -1,0 +1,100 @@
+<style>
+  .pulse-grid { display:grid; grid-template-columns:repeat(3,minmax(260px,1fr)); gap:18px; align-items:start; }
+  .pulse-card { cursor:pointer; border:2px solid transparent; border-radius:18px; padding:14px; background:rgba(255,255,255,.58); box-shadow:0 12px 34px rgba(0,0,0,.08); transition:.18s ease; }
+  .pulse-card:hover { transform:translateY(-2px); box-shadow:0 16px 38px rgba(0,0,0,.12); }
+  .pulse-card.selected { border-color:#0a84ff; box-shadow:0 0 0 4px rgba(10,132,255,.16); }
+  .tag { display:inline-block; margin-bottom:10px; padding:4px 8px; border-radius:999px; background:#e9e9ee; color:#555; font-size:12px; font-weight:650; }
+  .tag.recommended { background:#dceeff; color:#0069c9; }
+  .mac-panel { overflow:hidden; border:1px solid rgba(0,0,0,.13); border-radius:14px; background:#ececec; box-shadow:0 18px 40px rgba(0,0,0,.18); color:#242424; font:13px -apple-system,BlinkMacSystemFont,sans-serif; }
+  .mac-body { padding:10px; }
+  .group { overflow:hidden; border-radius:11px; background:#fff; border:1px solid rgba(0,0,0,.06); }
+  .metric { display:grid; grid-template-columns:18px 92px 1fr; align-items:center; min-height:27px; padding:0 11px; }
+  .metric .v { text-align:right; font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap; }
+  .control { display:grid; grid-template-columns:18px 1fr auto; align-items:center; min-height:41px; padding:0 11px; }
+  .control + .control { border-top:1px solid #e8e8e8; }
+  .select { padding:5px 10px; min-width:70px; text-align:center; border:1px solid #d2d2d2; border-radius:7px; background:linear-gradient(#fafafa,#ededed); }
+  .switch { width:34px; height:19px; border-radius:99px; background:#0a84ff; position:relative; }
+  .switch:after { content:""; position:absolute; width:15px; height:15px; right:2px; top:2px; border-radius:50%; background:#fff; box-shadow:0 1px 2px #777; }
+  .quit { padding:10px 13px; border-top:1px solid rgba(0,0,0,.1); background:#f5f5f5; }
+  .native-menu .mac-body { padding:4px 0; }
+  .native-menu .metric,.native-menu .control { min-height:30px; border-radius:6px; margin:0 5px; }
+  .native-menu .group { border:0; border-radius:0; background:transparent; }
+  .native-menu .select { border:0; background:transparent; padding:0; }
+  .current .mac-body { padding:10px; }
+  .current .group { margin-bottom:8px; }
+  .current .metric { grid-template-columns:18px 76px 1fr; padding:0 9px; }
+  .current .metric .v { letter-spacing:-.3px; }
+  .notes { margin:12px 2px 0; color:#60646c; font-size:13px; line-height:1.45; }
+  @media (max-width:950px){ .pulse-grid{grid-template-columns:1fr;} }
+</style>
+
+<h2>详情面板采用哪种原生架构？</h2>
+<p class="subtitle">重点比较：系统设置相似度、刷新间隔可点击可靠性、信息密度。点击一张方案卡选择。</p>
+
+<div class="pulse-grid cards">
+  <div class="pulse-card card" data-choice="a-native-menu" onclick="toggleSelect(this)">
+    <span class="tag">A · 最轻</span>
+    <div class="mac-panel native-menu">
+      <div class="mac-body"><div class="group">
+        <div class="metric"><span>⚡</span><span>系统负载</span><span class="v">7.1 W</span></div>
+        <div class="metric"><span>♨</span><span>电池温度</span><span class="v">32.4 °C</span></div>
+        <div class="metric"><span>▦</span><span>内存使用</span><span class="v">14.34 / 24 GB</span></div>
+        <div class="metric"><span>◉</span><span>内存压力</span><span class="v">正常</span></div>
+        <div class="metric"><span>▣</span><span>CPU 使用</span><span class="v">14%</span></div>
+        <div class="metric"><span>🔌</span><span>电源状态</span><span class="v">已连接</span></div>
+        <div class="control"><span>◷</span><span>刷新间隔</span><span class="select">2 秒 ›</span></div>
+        <div class="control"><span>⏻</span><span>开机启动</span><span>✓</span></div>
+      </div></div>
+      <div class="quit">⊗　退出 Pulse</div>
+    </div>
+    <h3>纯原生 NSMenu</h3>
+    <p class="notes">内存最低、子菜单最稳；但视觉更像传统菜单，无法真正还原“系统设置”的开关与选择器。</p>
+  </div>
+
+  <div class="pulse-card card current" data-choice="b-custom-menu" onclick="toggleSelect(this)">
+    <span class="tag">B · 当前路线修补</span>
+    <div class="mac-panel">
+      <div class="mac-body">
+        <div class="group">
+          <div class="metric"><span>⚡</span><span>系统负载:</span><span class="v">7.1 W</span></div>
+          <div class="metric"><span>♨</span><span>电池温度:</span><span class="v">32.4 °C</span></div>
+          <div class="metric"><span>▦</span><span>内存使用:</span><span class="v">14.34 / 24.00 GB</span></div>
+          <div class="metric"><span>◉</span><span>内存压力:</span><span class="v">正常</span></div>
+          <div class="metric"><span>▣</span><span>CPU 使用:</span><span class="v">14%</span></div>
+          <div class="metric"><span>🔌</span><span>电源状态:</span><span class="v">已连接电源</span></div>
+        </div>
+        <div class="group">
+          <div class="control"><span>◷</span><span>刷新间隔</span><span class="select">2 秒 ↕</span></div>
+          <div class="control"><span>⏻</span><span>开机自动启动</span><span class="switch"></span></div>
+        </div>
+      </div>
+      <div class="quit">⊗　退出 Pulse</div>
+    </div>
+    <h3>继续嵌在 NSMenu 内</h3>
+    <p class="notes">改动较少；但菜单追踪循环与嵌套弹出菜单存在先天冲突，继续修补仍有交互脆弱性。</p>
+  </div>
+
+  <div class="pulse-card card" data-choice="c-native-popover" onclick="toggleSelect(this)">
+    <span class="tag recommended">C · 推荐</span>
+    <div class="mac-panel">
+      <div class="mac-body">
+        <div class="group">
+          <div class="metric"><span>⚡</span><span>系统负载</span><span class="v">7.1 W</span></div>
+          <div class="metric"><span>♨</span><span>电池温度</span><span class="v">32.4 °C</span></div>
+          <div class="metric"><span>▦</span><span>内存使用</span><span class="v">14.34 / 24.00 GB (60%)</span></div>
+          <div class="metric"><span>◉</span><span>内存压力</span><span class="v">正常</span></div>
+          <div class="metric"><span>▣</span><span>CPU 使用</span><span class="v">14%</span></div>
+          <div class="metric"><span>🔌</span><span>电源状态</span><span class="v">已连接电源</span></div>
+        </div>
+        <div style="height:8px"></div>
+        <div class="group">
+          <div class="control"><span>◷</span><span>刷新间隔</span><span class="select">2 秒 ↕</span></div>
+          <div class="control"><span>⏻</span><span>开机自动启动</span><span class="switch"></span></div>
+        </div>
+      </div>
+      <div class="quit">⊗　退出 Pulse　　　　　　　　　⌘Q</div>
+    </div>
+    <h3>原生 NSPopover / 面板</h3>
+    <p class="notes">控件处在正常窗口事件系统里，选择器与开关可靠；最接近系统设置分组行样式，代价是从“传统菜单”改为状态栏弹出面板。</p>
+  </div>
+</div>

@@ -1,0 +1,20 @@
+# macOS System Files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Build and Xcode Artifacts
+build/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.app
+*.dmg
+
+# User Specific Files
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.pbxuser
+release/
+test_bin

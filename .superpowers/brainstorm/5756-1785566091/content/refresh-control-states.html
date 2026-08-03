@@ -1,0 +1,44 @@
+<style>
+  .state-grid{display:grid;grid-template-columns:repeat(2,minmax(300px,1fr));gap:22px;max-width:900px;margin:26px auto}
+  .state-card{padding:18px;border-radius:16px;background:rgba(255,255,255,.68);box-shadow:0 12px 34px rgba(0,0,0,.08)}
+  .settings-group{overflow:hidden;border-radius:14px;background:#f5f5f6;color:#252527;font:14px -apple-system,BlinkMacSystemFont,sans-serif}
+  .settings-row{display:grid;grid-template-columns:22px 1fr auto;align-items:center;min-height:48px;padding:0 14px}
+  .settings-row+.settings-row{border-top:1px solid rgba(0,0,0,.07)}
+  .refresh-picker{display:flex;align-items:center;height:32px;border-radius:9px;transition:.15s ease}
+  .refresh-picker .value{padding:0 10px;font-weight:500;white-space:nowrap}
+  .refresh-picker .arrows{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:#e3e3e5;font-size:17px;font-weight:700;line-height:1}
+  .hover .refresh-picker{padding-left:3px;background:#e2e2e4}
+  .hover .refresh-picker .arrows{background:transparent}
+  .switch{width:39px;height:23px;border-radius:99px;background:#0a84ff;position:relative}
+  .switch:after{content:"";position:absolute;right:2px;top:2px;width:19px;height:19px;border-radius:50%;background:white;box-shadow:0 1px 3px rgba(0,0,0,.28)}
+  .state-card h3{margin:15px 0 5px}.state-card p{margin:0;color:#666a72;line-height:1.45}
+  .rule{max-width:900px;margin:12px auto 0;padding:14px 16px;border-radius:10px;background:rgba(10,132,255,.07);color:#36516d}
+  @media(max-width:740px){.state-grid{grid-template-columns:1fr}}
+</style>
+
+<h2>刷新间隔控件 · 两种原生状态</h2>
+<p class="subtitle">按你提供的 macOS 系统设置参考复刻。这里只改变 hover 表现，点击仍由原生 NSPopUpButton 处理。</p>
+
+<div class="state-grid">
+  <div class="state-card">
+    <div class="settings-group">
+      <div class="settings-row"><span>◷</span><span>刷新间隔</span><span class="refresh-picker"><span class="value">2 秒</span><span class="arrows">⌃<br>⌄</span></span></div>
+      <div class="settings-row"><span>⏻</span><span>开机自动启动</span><span class="switch"></span></div>
+    </div>
+    <h3>常态</h3><p>数值区域透明；只有上下箭头具有独立圆形浅灰底。</p>
+  </div>
+  <div class="state-card hover">
+    <div class="settings-group">
+      <div class="settings-row"><span>◷</span><span>刷新间隔</span><span class="refresh-picker"><span class="value">2 秒</span><span class="arrows">⌃<br>⌄</span></span></div>
+      <div class="settings-row"><span>⏻</span><span>开机自动启动</span><span class="switch"></span></div>
+    </div>
+    <h3>鼠标悬浮</h3><p>数值和箭头共同进入宽圆角浅灰背景；箭头不再单独叠加圆底。</p>
+  </div>
+</div>
+
+<div class="rule">实现边界：自定义容器只监听 mouseEntered / mouseExited 并切换背景；原生 NSPopUpButton 覆盖整个热区，负责点击、键盘操作、选中状态和菜单。</div>
+
+<div class="options" style="max-width:900px;margin:22px auto 0">
+  <div class="option" data-choice="approve-refresh-states" onclick="toggleSelect(this)"><div class="letter">✓</div><div class="content"><h3>这就是我要的</h3><p>采用常态与悬浮两态设计。</p></div></div>
+  <div class="option" data-choice="revise-refresh-states" onclick="toggleSelect(this)"><div class="letter">↺</div><div class="content"><h3>还需调整</h3><p>回复需要变化的细节。</p></div></div>
+</div>

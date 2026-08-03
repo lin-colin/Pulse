@@ -1,0 +1,54 @@
+<h2>方案 A + 真实使用率</h2>
+<p class="subtitle">示例采用截图数据：已用 20.08 GB ÷ 物理内存 24 GB ≈ 84%，macOS 内存压力为“警告”（黄色）。百分比回答“用了多少”，颜色回答“系统是否吃力”。</p>
+
+<div class="cards">
+  <div class="card" data-choice="a1" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:30px;background:#1f2226;display:flex;justify-content:center;">
+      <div style="display:grid;grid-template-columns:116px 116px;gap:8px 18px;padding:13px 16px;border-radius:13px;background:#6e6841;color:#f4f4ee;font:600 21px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px #0005;">
+        <span><b style="color:#ffb34c">ϟ</b> 31.5 W</span>
+        <span title="已用 20.08 / 24 GB · 压力：警告"><b style="color:#f3cc52">▣</b> <b style="color:#f3cc52">84%</b></span>
+        <span><b style="color:#58d47a">♨</b> 34.0 °C</span>
+        <span><b style="color:#f3cc52">▦</b> 64%</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A1 · 百分比按压力着色（推荐）</h3>
+      <p>菜单栏保持紧凑；84% 是物理内存使用率，黄色来自 macOS 压力状态。悬停或详情页显示“20.08 / 24 GB · 警告”。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="a2" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:30px;background:#1f2226;display:flex;justify-content:center;">
+      <div style="display:grid;grid-template-columns:116px 138px;gap:8px 18px;padding:13px 16px;border-radius:13px;background:#6e6841;color:#f4f4ee;font:600 21px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px #0005;">
+        <span><b style="color:#ffb34c">ϟ</b> 31.5 W</span>
+        <span><b style="color:#f3cc52">▣</b> 84% <small style="font-size:14px;color:#f3cc52">警告</small></span>
+        <span><b style="color:#58d47a">♨</b> 34.0 °C</span>
+        <span><b style="color:#f3cc52">▦</b> 64%</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A2 · 百分比 + 状态文字</h3>
+      <p>含义最直接，不依赖用户理解颜色；代价是状态栏更宽，而且“正常 / 警告 / 严重”的文字长度会变化。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="a3" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:30px;background:#1f2226;display:flex;justify-content:center;">
+      <div style="display:grid;grid-template-columns:116px 116px;gap:8px 18px;padding:13px 16px;border-radius:13px;background:#6e6841;color:#f4f4ee;font:600 21px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px #0005;">
+        <span><b style="color:#ffb34c">ϟ</b> 31.5 W</span>
+        <span><b style="color:#f3cc52">▣</b> 84% <i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f3cc52;vertical-align:2px"></i></span>
+        <span><b style="color:#58d47a">♨</b> 34.0 °C</span>
+        <span><b style="color:#f3cc52">▦</b> 64%</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A3 · 百分比固定色 + 状态灯</h3>
+      <p>数字只表达使用率，旁边的灯只表达压力，语义分离最严格；但增加了一个视觉元素，菜单栏会稍显拥挤。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;padding:18px;border-radius:12px;background:#fff7df;border:1px solid #ead28c;">
+  <h3 style="margin-top:0;color:#765c0d;">不能承诺的事情</h3>
+  <p style="margin-bottom:0;">84% 并不代表“距离严重还有 16%”。macOS 会结合可回收缓存、压缩效率、交换活动和内存申请速度判断压力，所以相同使用率可能是绿色，也可能是黄色。要预测是否正在逼近严重，应在详情里补充压力趋势，而不是伪造一个官方进度条。</p>
+</div>

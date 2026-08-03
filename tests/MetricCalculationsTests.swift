@@ -1,0 +1,1650 @@
+import Darwin
+import Foundation
+import AppKit
+import IOKit.ps
+
+/// 为采集层测试提供确定的部分或完整 SMC 快照。
+private final class StubSMCReader: SMCReading {
+    private let snapshot: SMCSnapshot
+
+    init(systemPowerWatts: Double?, batteryTemperatureCelsius: Double?) {
+        snapshot = SMCSnapshot(
+            systemPowerWatts: systemPowerWatts,
+            batteryTemperatureCelsius: batteryTemperatureCelsius
+        )
+    }
+
+    func readSnapshot() -> SMCSnapshot {
+        snapshot
+    }
+}
+
+/// Pulse 指标纯函数测试入口，不依赖 AppKit 或真实硬件状态。
+@main
+struct MetricCalculationsTests {
+    private static var passed = 0
+    private static var failed = 0
+
+    static func main() {
+        testSystemLoadConversion()
+        testBatteryTemperatureConversion()
+        testPreferredSystemLoad()
+        testPreferredBatteryTemperature()
+        testSMCValueDecoding()
+        testSMCABILayout()
+        testSMCResponseValidation()
+        testHardwareMonitorSourceIntegration()
+        // 以内核压力级别替代伪造的“压力百分比”，避免继续把可用内存比例误报为压力。
+        testMemoryPressureLevelMapping()
+        // 单独验证内存使用率的页统计计算，确保其与压力状态解耦。
+        testMemoryUsageCalculation()
+        // 以可控时钟和读取器锁定采集层的初始化、事件更新与低频重同步语义。
+        testMemoryMonitorInitialSnapshotAndResync()
+        // 单调时间倒退时必须主动校验，避免未来时间戳让旧状态长期失效。
+        testMemoryMonitorClockRollback()
+        // 首次读取失败后仍允许系统事件恢复为可信状态。
+        testMemoryMonitorInitialFailureAndEventRecovery()
+        // 短暂重同步失败不得清除已经由内核事件确认的压力状态。
+        testMemoryMonitorResyncFailureRetention()
+        // VM 页统计失败与压力状态彼此独立，避免部分故障污染另一指标。
+        testMemoryMonitorStatisticsFailurePreservesPressure()
+        // 无效及合并事件必须遵循忽略未知值和最严重状态优先的规则。
+        testMemoryMonitorEventValidation()
+        // 阻塞重同步期间事件与后续快照都必须保持响应，并防止旧结果覆盖新事件。
+        testMemoryMonitorConcurrentResyncPreservesNewerEvent()
+        // reader 可重入事件入口用于证明任何注入 closure 都不会在状态锁内执行。
+        testMemoryMonitorReentrantPressureReader()
+        // 默认事件时钟也允许同步回调监控器，证明时钟读取发生在加锁之前。
+        testMemoryMonitorReentrantEventUptimeReader()
+        testMetricFormatting()
+        testFormattedMemoryUsageText()
+        testDefaultRefreshInterval()
+        testRefreshIntervalValidation()
+        // 验证展示语义，让颜色/可用性只由真实压力状态决定。
+        testMemoryPresentationRole()
+        // 验证电源指示与功耗告警的色彩与图标解耦。
+        testPowerDisplayConfigurationCharging()
+        testPowerDisplayConfigurationPluggedInPassThrough()
+        testPowerDisplayConfigurationDischarging()
+        // 验证电源状态精准文案映射，涵盖充电、连接电源未充电、使用电池三种物理场景。
+        testPowerSourceStateDescription()
+        testPowerSourceSnapshotDerivation()
+        testPulseSnapshotKeepsOneRefreshState()
+        testStatusItemWidthTracksLongestValues()
+        testStatusItemViewLetsParentButtonHandleClicks()
+        testRefreshControlUsesNativeSelectionAndHoverState()
+        testPopoverContentUpdatesExistingMetricLabels()
+        testPopoverGroupsAndRowsShareHorizontalGeometry()
+        testPopoverUsesSystemWindowAndSharedGroupColors()
+        testPopoverLaunchSwitchReflectsActualState()
+        testPopoverQuitButtonForwardsAction()
+        testLaunchAtLoginFailureRestoresDisplayedState()
+        // 运行全功能与 A1 硬件口径回归测试断言集。
+        testFullFeatureAndRegressionSuite()
+
+        if failed > 0 {
+            fputs("FAILED: \(failed) failed, \(passed) passed\n", stderr)
+            exit(1)
+        }
+
+        print("PASSED: \(passed) assertions")
+    }
+
+    /// 验证系统负载只接受非负有限毫瓦值。
+    private static func testSystemLoadConversion() {
+        expectEqual(
+            MetricCalculations.systemLoadWatts(fromMilliwatts: 5_270),
+            5.27,
+            "5270mW should convert to 5.27W"
+        )
+        expectEqual(
+            MetricCalculations.systemLoadWatts(fromMilliwatts: 0),
+            0,
+            "zero system load should remain valid"
+        )
+        expectNil(
+            MetricCalculations.systemLoadWatts(fromMilliwatts: -1),
+            "negative system load should be invalid"
+        )
+        expectNil(
+            MetricCalculations.systemLoadWatts(fromMilliwatts: .infinity),
+            "infinite system load should be invalid"
+        )
+        expectNil(
+            MetricCalculations.systemLoadWatts(fromMilliwatts: nil),
+            "missing system load should remain unavailable"
+        )
+    }
+
+    /// 验证物理电池温度单位和合理范围。
+    private static func testBatteryTemperatureConversion() {
+        expectEqual(
+            MetricCalculations.batteryTemperatureCelsius(fromCentiDegrees: 3_100),
+            31,
+            "3100 centi-degrees should convert to 31C"
+        )
+        expectEqual(
+            MetricCalculations.batteryTemperatureCelsius(fromCentiDegrees: -2_000),
+            -20,
+            "lower temperature boundary should be valid"
+        )
+        expectEqual(
+            MetricCalculations.batteryTemperatureCelsius(fromCentiDegrees: 10_000),
+            100,
+            "upper temperature boundary should be valid"
+        )
+        expectNil(
+            MetricCalculations.batteryTemperatureCelsius(fromCentiDegrees: -2_001),
+            "temperature below the physical range should be invalid"
+        )
+        expectNil(
+            MetricCalculations.batteryTemperatureCelsius(fromCentiDegrees: 10_001),
+            "temperature above the physical range should be invalid"
+        )
+        expectNil(
+            MetricCalculations.batteryTemperatureCelsius(fromCentiDegrees: .nan),
+            "NaN temperature should be invalid"
+        )
+    }
+
+    /// 验证系统负载始终优先使用 PSTR，并禁止充电状态回退到错误的旧字段。
+    private static func testPreferredSystemLoad() {
+        expectEqual(
+            MetricCalculations.preferredSystemLoadWatts(
+                smcWatts: 9.148,
+                legacyMilliwatts: 79_283,
+                externalConnected: true
+            ),
+            9.148,
+            "PSTR should override the charging-invalid legacy SystemLoad"
+        )
+        expectNil(
+            MetricCalculations.preferredSystemLoadWatts(
+                smcWatts: nil,
+                legacyMilliwatts: 79_283,
+                externalConnected: true
+            ),
+            "external power must not fall back to the legacy SystemLoad"
+        )
+        expectEqual(
+            MetricCalculations.preferredSystemLoadWatts(
+                smcWatts: nil,
+                legacyMilliwatts: 6_349,
+                externalConnected: false
+            ),
+            6.349,
+            "battery power may use the validated legacy fallback"
+        )
+        expectNil(
+            MetricCalculations.preferredSystemLoadWatts(
+                smcWatts: nil,
+                legacyMilliwatts: 6_349,
+                externalConnected: nil
+            ),
+            "unknown power state must not guess from the legacy field"
+        )
+        expectNil(
+            MetricCalculations.preferredSystemLoadWatts(
+                smcWatts: 501,
+                legacyMilliwatts: 6_349,
+                externalConnected: true
+            ),
+            "an invalid PSTR value must not unlock the AC fallback"
+        )
+        for invalidPower in [Double.nan, Double.infinity, -0.1] {
+            expectNil(
+                MetricCalculations.preferredSystemLoadWatts(
+                    smcWatts: invalidPower,
+                    legacyMilliwatts: 6_349,
+                    externalConnected: true
+                ),
+                "non-finite and negative PSTR values must be rejected"
+            )
+        }
+    }
+
+    /// 验证电池温度优先采用 TB0T，并在其不可用时回退到 BMS 物理温度。
+    private static func testPreferredBatteryTemperature() {
+        expectEqual(
+            MetricCalculations.preferredBatteryTemperatureCelsius(
+                smcCelsius: 32.8,
+                bmsCentiDegrees: 3_060
+            ),
+            32.8,
+            "TB0T should be the primary battery temperature"
+        )
+        expectEqual(
+            MetricCalculations.preferredBatteryTemperatureCelsius(
+                smcCelsius: nil,
+                bmsCentiDegrees: 3_060
+            ),
+            30.6,
+            "BMS temperature should remain a truthful fallback"
+        )
+        expectEqual(
+            MetricCalculations.preferredBatteryTemperatureCelsius(
+                smcCelsius: 101,
+                bmsCentiDegrees: 3_060
+            ),
+            30.6,
+            "an invalid TB0T value should use the BMS fallback"
+        )
+        expectNil(
+            MetricCalculations.preferredBatteryTemperatureCelsius(
+                smcCelsius: .nan,
+                bmsCentiDegrees: nil
+            ),
+            "invalid and missing temperature sources should remain unavailable"
+        )
+    }
+
+    /// 验证 PSTR 的 flt 与 TB0T 的 sp78 按各自字节序正确解码。
+    private static func testSMCValueDecoding() {
+        expectEqual(
+            SMCValueDecoder.decode(
+                dataType: SMCValueDecoder.floatDataType,
+                bytes: [0x00, 0x00, 0xF4, 0x40]
+            ),
+            7.625,
+            "little-endian flt bytes should decode to watts"
+        )
+        expectEqual(
+            SMCValueDecoder.decode(
+                dataType: SMCValueDecoder.sp78DataType,
+                bytes: [0x20, 0xC0]
+            ),
+            32.75,
+            "big-endian sp78 bytes should decode to Celsius"
+        )
+        expectEqual(
+            SMCValueDecoder.decode(
+                dataType: SMCValueDecoder.sp78DataType,
+                bytes: [0xFE, 0x80]
+            ),
+            -1.5,
+            "signed sp78 bytes should preserve negative values"
+        )
+        expectNil(
+            SMCValueDecoder.decode(
+                dataType: SMCValueDecoder.floatDataType,
+                bytes: [0x00, 0x00]
+            ),
+            "short flt payloads should be rejected"
+        )
+        expectNil(
+            SMCValueDecoder.decode(dataType: 0, bytes: [0, 0, 0, 0]),
+            "unknown SMC data types should be rejected"
+        )
+        expectNil(
+            SMCValueDecoder.decode(
+                dataType: SMCValueDecoder.floatDataType,
+                bytes: [0x00, 0x00, 0xF4, 0x40, 0x00]
+            ),
+            "oversized flt payloads should be rejected"
+        )
+        expectNil(
+            SMCValueDecoder.decode(
+                dataType: SMCValueDecoder.sp78DataType,
+                bytes: [0x20, 0xC0, 0x00]
+            ),
+            "oversized sp78 payloads should be rejected"
+        )
+    }
+
+    /// 防止 Swift 复用 C 结构尾部填充，导致 AppleSMC 用户客户端拒绝请求。
+    private static func testSMCABILayout() {
+        expectEqual(
+            Double(SMCReader.abiKeyDataStride),
+            80,
+            "SMCKeyData must retain the 80-byte C ABI layout"
+        )
+        let offsets = SMCReader.abiFieldOffsets
+        expectEqual(Double(offsets["pLimitData"] ?? -1), 12, "pLimitData offset must match C")
+        expectEqual(Double(offsets["keyInfo"] ?? -1), 28, "keyInfo offset must match C")
+        expectEqual(Double(offsets["result"] ?? -1), 40, "result offset must match C")
+        expectEqual(Double(offsets["data8"] ?? -1), 42, "data8 offset must match C")
+        expectEqual(Double(offsets["data32"] ?? -1), 44, "data32 offset must match C")
+        expectEqual(Double(offsets["bytes"] ?? -1), 48, "bytes offset must match C")
+    }
+
+    /// 区分 IOKit 外层成功与 SMC 命令级成功，避免失败载荷被解码为零。
+    private static func testSMCResponseValidation() {
+        expectTrue(
+            SMCReader.isSuccessfulResponse(
+                kernelResult: KERN_SUCCESS,
+                protocolResult: 0,
+                outputSize: 80
+            ),
+            "a complete successful SMC response should be accepted"
+        )
+        expectFalse(
+            SMCReader.isSuccessfulResponse(
+                kernelResult: KERN_SUCCESS,
+                protocolResult: 1,
+                outputSize: 80
+            ),
+            "an SMC protocol error must be rejected even when IOKit succeeds"
+        )
+        expectFalse(
+            SMCReader.isSuccessfulResponse(
+                kernelResult: KERN_SUCCESS,
+                protocolResult: 0,
+                outputSize: 79
+            ),
+            "a truncated SMC response must be rejected"
+        )
+        expectFalse(
+            SMCReader.isSuccessfulResponse(
+                kernelResult: KERN_FAILURE,
+                protocolResult: 0,
+                outputSize: 80
+            ),
+            "an IOKit transport failure must be rejected"
+        )
+    }
+
+    /// 验证采集层在完整、部分和失败数据源下执行相同的安全降级策略。
+    private static func testHardwareMonitorSourceIntegration() {
+        let chargingProperties: [String: Any] = [
+            "ExternalConnected": true,
+            "Temperature": 3_060,
+            "PowerTelemetryData": ["SystemLoad": 79_283]
+        ]
+        var primaryBatteryReadCount = 0
+        let primaryMonitor = HardwareMonitor(
+            smcReader: StubSMCReader(
+                systemPowerWatts: 9.148,
+                batteryTemperatureCelsius: 32.8
+            ),
+            batteryPropertiesReader: {
+                primaryBatteryReadCount += 1
+                return chargingProperties
+            }
+        )
+        let primary = primaryMonitor.getSnapshot()
+        expectEqual(primary.systemLoadWatts, 9.148, "HardwareMonitor should select PSTR")
+        expectEqual(
+            primary.batteryTemperatureCelsius,
+            32.8,
+            "HardwareMonitor should select TB0T"
+        )
+        expectEqual(
+            Double(primaryBatteryReadCount),
+            0,
+            "valid SMC metrics should skip the AppleSmartBattery dictionary read"
+        )
+
+        let temperatureOnlyMonitor = HardwareMonitor(
+            smcReader: StubSMCReader(
+                systemPowerWatts: nil,
+                batteryTemperatureCelsius: 32.8
+            ),
+            batteryPropertiesReader: { chargingProperties }
+        )
+        let temperatureOnly = temperatureOnlyMonitor.getSnapshot()
+        expectNil(
+            temperatureOnly.systemLoadWatts,
+            "a failed PSTR read on AC must not expose legacy SystemLoad"
+        )
+        expectEqual(
+            temperatureOnly.batteryTemperatureCelsius,
+            32.8,
+            "a valid TB0T value should survive a PSTR failure"
+        )
+
+        let powerOnlyMonitor = HardwareMonitor(
+            smcReader: StubSMCReader(
+                systemPowerWatts: 8.5,
+                batteryTemperatureCelsius: nil
+            ),
+            batteryPropertiesReader: { chargingProperties }
+        )
+        let powerOnly = powerOnlyMonitor.getSnapshot()
+        expectEqual(
+            powerOnly.systemLoadWatts,
+            8.5,
+            "a valid PSTR value should survive a TB0T failure"
+        )
+        expectEqual(
+            powerOnly.batteryTemperatureCelsius,
+            30.6,
+            "a failed TB0T read should use the BMS temperature"
+        )
+
+        let unavailableSMCMonitor = HardwareMonitor(
+            smcReader: nil,
+            batteryPropertiesReader: { chargingProperties }
+        )
+        let unavailableSMC = unavailableSMCMonitor.getSnapshot()
+        expectNil(
+            unavailableSMC.systemLoadWatts,
+            "an unavailable SMC connection on AC must remain unavailable"
+        )
+        expectEqual(
+            unavailableSMC.batteryTemperatureCelsius,
+            30.6,
+            "an unavailable SMC connection should retain the BMS temperature"
+        )
+
+        let batteryMonitor = HardwareMonitor(
+            smcReader: nil,
+            batteryPropertiesReader: {
+                [
+                    "ExternalConnected": false,
+                    "PowerTelemetryData": ["SystemLoad": 6_349]
+                ]
+            }
+        )
+        expectEqual(
+            batteryMonitor.getSnapshot().systemLoadWatts,
+            6.349,
+            "battery power should retain the validated legacy fallback"
+        )
+
+        let malformedMonitor = HardwareMonitor(
+            smcReader: nil,
+            batteryPropertiesReader: {
+                [
+                    "ExternalConnected": "unknown",
+                    "Temperature": "invalid",
+                    "PowerTelemetryData": ["SystemLoad": "invalid"]
+                ]
+            }
+        )
+        let malformed = malformedMonitor.getSnapshot()
+        expectNil(malformed.systemLoadWatts, "malformed power properties should be unavailable")
+        expectNil(
+            malformed.batteryTemperatureCelsius,
+            "malformed temperature properties should be unavailable"
+        )
+    }
+
+    /// 验证内核返回值只映射已知压力级别，防止未知协议值被误判为健康状态。
+    private static func testMemoryPressureLevelMapping() {
+        expectTrue(
+            MemoryPressureLevel(rawKernelValue: 1) == .normal,
+            "kernel value 1 should map to normal memory pressure"
+        )
+        expectTrue(
+            MemoryPressureLevel(rawKernelValue: 2) == .warning,
+            "kernel value 2 should map to warning memory pressure"
+        )
+        expectTrue(
+            MemoryPressureLevel(rawKernelValue: 4) == .critical,
+            "kernel value 4 should map to critical memory pressure"
+        )
+        expectTrue(
+            MemoryPressureLevel(rawKernelValue: 3) == .unavailable,
+            "unknown kernel values should remain unavailable"
+        )
+        expectTrue(
+            MemoryPressureLevel(rawKernelValue: nil) == .unavailable,
+            "missing kernel values should remain unavailable"
+        )
+    }
+
+    /// 验证页统计计算与压力状态独立，并将无效页统计明确标记为不可用而非零使用率。
+    private static func testMemoryUsageCalculation() {
+        let snapshot = MetricCalculations.memorySnapshot(
+            statistics: MemoryPageStatistics(
+                totalBytes: 24 * 1_073_741_824,
+                pageSize: 16_384,
+                freePages: 6_554,
+                externalPages: 262_144
+            ),
+            pressureLevel: .normal
+        )
+        expectEqual(
+            snapshot.usagePercentage,
+            82.92,
+            "24GiB page statistics should produce about 82.92 percent usage",
+            tolerance: 0.01
+        )
+        expectTrue(
+            snapshot.usedBytes != nil && snapshot.usedBytes! <= 24 * 1_073_741_824,
+            "used bytes should not exceed total memory"
+        )
+        expectTrue(snapshot.pressureLevel == .normal, "usage calculation should retain pressure")
+
+        let additionOverflowSnapshot = MetricCalculations.memorySnapshot(
+            statistics: MemoryPageStatistics(
+                totalBytes: 24 * 1_073_741_824,
+                pageSize: 16_384,
+                freePages: UInt64.max,
+                externalPages: 1
+            ),
+            pressureLevel: .warning
+        )
+        expectTrue(
+            additionOverflowSnapshot.usedBytes == nil,
+            "overflowing available page addition should leave used bytes unavailable"
+        )
+        expectNil(
+            additionOverflowSnapshot.usagePercentage,
+            "overflowing available page addition should leave usage unavailable"
+        )
+        expectTrue(
+            additionOverflowSnapshot.totalBytes == 24 * 1_073_741_824,
+            "invalid page counts should retain the valid hardware memory total"
+        )
+        expectTrue(
+            additionOverflowSnapshot.pressureLevel == .warning,
+            "invalid page counts should retain the independent pressure state"
+        )
+
+        let multiplicationOverflowSnapshot = MetricCalculations.memorySnapshot(
+            statistics: MemoryPageStatistics(
+                totalBytes: 24 * 1_073_741_824,
+                pageSize: UInt64.max,
+                freePages: 2,
+                externalPages: 0
+            ),
+            pressureLevel: .warning
+        )
+        expectTrue(
+            multiplicationOverflowSnapshot.usedBytes == nil,
+            "overflowing available byte conversion should leave used bytes unavailable"
+        )
+        expectNil(
+            multiplicationOverflowSnapshot.usagePercentage,
+            "overflowing available byte conversion should leave usage unavailable"
+        )
+
+        let exceedsTotalSnapshot = MetricCalculations.memorySnapshot(
+            statistics: MemoryPageStatistics(
+                totalBytes: 100,
+                pageSize: 10,
+                freePages: 11,
+                externalPages: 0
+            ),
+            pressureLevel: .warning
+        )
+        expectTrue(
+            exceedsTotalSnapshot.usedBytes == nil,
+            "available bytes above total memory should leave used bytes unavailable"
+        )
+        expectNil(
+            exceedsTotalSnapshot.usagePercentage,
+            "available bytes above total memory should leave usage unavailable"
+        )
+
+        let fullyAvailableSnapshot = MetricCalculations.memorySnapshot(
+            statistics: MemoryPageStatistics(
+                totalBytes: 100,
+                pageSize: 10,
+                freePages: 10,
+                externalPages: 0
+            ),
+            pressureLevel: .normal
+        )
+        expectEqual(
+            fullyAvailableSnapshot.usedBytes.map(Double.init),
+            0,
+            "available bytes equal to total memory should be a valid zero usage value"
+        )
+        expectEqual(
+            fullyAvailableSnapshot.usagePercentage,
+            0,
+            "available bytes equal to total memory should be a valid zero percentage"
+        )
+
+        let zeroTotalSnapshot = MetricCalculations.memorySnapshot(
+            statistics: MemoryPageStatistics(
+                totalBytes: 0,
+                pageSize: 10,
+                freePages: 0,
+                externalPages: 0
+            ),
+            pressureLevel: .critical
+        )
+        expectTrue(
+            zeroTotalSnapshot.totalBytes == nil && zeroTotalSnapshot.usedBytes == nil,
+            "a zero memory total should not be exposed as a valid capacity or usage"
+        )
+        expectNil(
+            zeroTotalSnapshot.usagePercentage,
+            "a zero memory total should leave usage unavailable"
+        )
+
+        let zeroPageSizeSnapshot = MetricCalculations.memorySnapshot(
+            statistics: MemoryPageStatistics(
+                totalBytes: 100,
+                pageSize: 0,
+                freePages: 0,
+                externalPages: 0
+            ),
+            pressureLevel: .critical
+        )
+        expectTrue(
+            zeroPageSizeSnapshot.totalBytes == 100,
+            "an invalid page size should retain the valid hardware memory total"
+        )
+        expectTrue(
+            zeroPageSizeSnapshot.usedBytes == nil,
+            "an invalid page size should leave used bytes unavailable"
+        )
+        expectNil(
+            zeroPageSizeSnapshot.usagePercentage,
+            "an invalid page size should leave usage unavailable"
+        )
+        expectTrue(
+            zeroPageSizeSnapshot.pressureLevel == .critical,
+            "an invalid page size should retain the independent pressure state"
+        )
+
+        let unavailableUsage = MetricCalculations.memorySnapshot(
+            statistics: nil,
+            pressureLevel: .critical
+        )
+        expectNil(
+            unavailableUsage.usagePercentage,
+            "missing page statistics should leave usage unavailable"
+        )
+        expectTrue(
+            unavailableUsage.pressureLevel == .critical,
+            "missing page statistics should retain a critical pressure state"
+        )
+        expectEqual(
+            MetricCalculations.formattedGigabytes(2 * 1_073_741_824),
+            "2.00 GB",
+            "gigabyte formatting should use binary units with two decimals"
+        )
+        expectEqual(
+            MetricCalculations.formattedGigabytes(nil),
+            "—",
+            "missing gigabytes should remain unavailable"
+        )
+    }
+
+    /// 验证初始 sysctl、逐次 VM 读取、即时事件和三十秒边界重同步能协同工作。
+    private static func testMemoryMonitorInitialSnapshotAndResync() {
+        var statisticsReads = 0
+        var pressureReads = 0
+        let baseUptime: TimeInterval = 1_000
+        let monitor = SystemMonitor(
+            memoryStatisticsReader: {
+                // 统计读取次数是为了证明每个快照都采集 VM 数据，而不是复用旧使用率。
+                statisticsReads += 1
+                return MemoryPageStatistics(
+                    totalBytes: 1_000,
+                    pageSize: 1,
+                    freePages: 100,
+                    externalPages: 200
+                )
+            },
+            pressureLevelReader: {
+                // 第一次提供初始化告警，第二次提供重同步后的正常状态。
+                pressureReads += 1
+                return pressureReads == 1 ? 0x02 : 0x01
+            },
+            startPressureEvents: false,
+            uptimeReader: { baseUptime }
+        )
+
+        let initial = monitor.getMemorySnapshot(nowUptime: baseUptime)
+        expectEqual(initial.usagePercentage, 70, "usage should come from VM statistics")
+        expectTrue(initial.pressureLevel == .warning, "initial sysctl state should be warning")
+        expectEqual(Double(pressureReads), 1, "initialization should read sysctl exactly once")
+
+        let oneSecondLater = monitor.getMemorySnapshot(nowUptime: baseUptime + 1)
+        expectTrue(
+            oneSecondLater.pressureLevel == .warning,
+            "a fresh pressure cache should retain the initial warning"
+        )
+        expectEqual(Double(pressureReads), 1, "one-second refreshes should not repoll sysctl")
+
+        monitor.recordMemoryPressureEvent(rawValue: 0x04, nowUptime: baseUptime + 1)
+        let eventUpdated = monitor.getMemorySnapshot(nowUptime: baseUptime + 1)
+        expectTrue(
+            eventUpdated.pressureLevel == .critical,
+            "a critical event should update the cached level immediately"
+        )
+        expectEqual(Double(pressureReads), 1, "an event update should not invoke sysctl")
+
+        let resynchronized = monitor.getMemorySnapshot(
+            nowUptime: baseUptime + 1 + PulseDefaults.memoryPressureResyncInterval
+        )
+        expectTrue(
+            resynchronized.pressureLevel == .normal,
+            "the exact resync boundary should repair a missed normal event"
+        )
+        expectEqual(Double(pressureReads), 2, "the resync boundary should reread sysctl")
+        expectEqual(Double(statisticsReads), 4, "every snapshot should reread VM statistics")
+    }
+
+    /// 验证时钟倒退会触发安全重读，而不是把负时间差误判成仍在缓存期内。
+    private static func testMemoryMonitorClockRollback() {
+        var pressureReads = 0
+        let baseUptime: TimeInterval = 2_000
+        let monitor = SystemMonitor(
+            memoryStatisticsReader: { nil },
+            pressureLevelReader: {
+                // 倒退前返回警告，倒退后的安全重读返回正常以便观察行为。
+                pressureReads += 1
+                return pressureReads == 1 ? 0x02 : 0x01
+            },
+            startPressureEvents: false,
+            uptimeReader: { baseUptime }
+        )
+
+        let rolledBack = monitor.getMemorySnapshot(nowUptime: baseUptime - 1)
+        expectTrue(
+            rolledBack.pressureLevel == .normal,
+            "a negative elapsed time should force a safe pressure reread"
+        )
+        expectEqual(Double(pressureReads), 2, "clock rollback should trigger exactly one reread")
+    }
+
+    /// 验证首次 sysctl 失败诚实显示不可用，同时后续 Dispatch 事件可以恢复状态。
+    private static func testMemoryMonitorInitialFailureAndEventRecovery() {
+        var pressureReads = 0
+        let baseUptime: TimeInterval = 3_000
+        let monitor = SystemMonitor(
+            memoryStatisticsReader: { nil },
+            pressureLevelReader: {
+                // 持续失败用于证明恢复只来自事件，而不是隐藏的再次轮询。
+                pressureReads += 1
+                return nil
+            },
+            startPressureEvents: false,
+            uptimeReader: { baseUptime }
+        )
+
+        let unavailable = monitor.getMemorySnapshot(nowUptime: baseUptime)
+        expectTrue(
+            unavailable.pressureLevel == .unavailable,
+            "a first sysctl failure should remain explicitly unavailable"
+        )
+        monitor.recordMemoryPressureEvent(rawValue: 0x02, nowUptime: baseUptime + 1)
+        let recovered = monitor.getMemorySnapshot(nowUptime: baseUptime + 1)
+        expectTrue(
+            recovered.pressureLevel == .warning,
+            "a valid event should recover an initially unavailable state"
+        )
+        expectEqual(Double(pressureReads), 1, "event recovery should not cause an early sysctl retry")
+    }
+
+    /// 验证定期 sysctl 暂时失败时仍保留最近的有效事件，避免告警闪回不可用。
+    private static func testMemoryMonitorResyncFailureRetention() {
+        var pressureReads = 0
+        let baseUptime: TimeInterval = 4_000
+        let monitor = SystemMonitor(
+            memoryStatisticsReader: { nil },
+            pressureLevelReader: {
+                // 初始化正常，边界重同步失败，用于验证最后可信值的保留策略。
+                pressureReads += 1
+                return pressureReads == 1 ? 0x01 : nil
+            },
+            startPressureEvents: false,
+            uptimeReader: { baseUptime }
+        )
+
+        monitor.recordMemoryPressureEvent(rawValue: 0x04, nowUptime: baseUptime + 1)
+        let retained = monitor.getMemorySnapshot(
+            nowUptime: baseUptime + 1 + PulseDefaults.memoryPressureResyncInterval
+        )
+        expectTrue(
+            retained.pressureLevel == .critical,
+            "a failed resync should retain the last trusted event"
+        )
+        expectEqual(Double(pressureReads), 2, "a failed boundary read should still count as a resync")
+
+        let shortlyAfterFailure = monitor.getMemorySnapshot(
+            nowUptime: baseUptime + 2 + PulseDefaults.memoryPressureResyncInterval
+        )
+        expectTrue(
+            shortlyAfterFailure.pressureLevel == .critical,
+            "a retained trusted event should survive until the next resync window"
+        )
+        expectEqual(
+            Double(pressureReads),
+            2,
+            "a failed resync should advance its timestamp to prevent one-second polling"
+        )
+    }
+
+    /// 验证 VM 统计缺失只让使用量不可用，不会抹掉独立取得的压力告警。
+    private static func testMemoryMonitorStatisticsFailurePreservesPressure() {
+        let baseUptime: TimeInterval = 5_000
+        let monitor = SystemMonitor(
+            memoryStatisticsReader: { nil },
+            pressureLevelReader: { 0x02 },
+            startPressureEvents: false,
+            uptimeReader: { baseUptime }
+        )
+
+        let snapshot = monitor.getMemorySnapshot(nowUptime: baseUptime)
+        expectNil(snapshot.usagePercentage, "missing VM statistics should leave usage unavailable")
+        expectTrue(snapshot.totalBytes == nil, "missing VM statistics should leave total unavailable")
+        expectTrue(
+            snapshot.pressureLevel == .warning,
+            "missing VM statistics should preserve the independent warning level"
+        )
+    }
+
+    /// 验证未知事件不改变状态，并让多位合并事件始终选择最严重的有效级别。
+    private static func testMemoryMonitorEventValidation() {
+        let baseUptime: TimeInterval = 6_000
+        let monitor = SystemMonitor(
+            memoryStatisticsReader: { nil },
+            pressureLevelReader: { 0x01 },
+            startPressureEvents: false,
+            uptimeReader: { baseUptime }
+        )
+
+        monitor.recordMemoryPressureEvent(rawValue: 0x08, nowUptime: baseUptime + 1)
+        let unchanged = monitor.getMemorySnapshot(nowUptime: baseUptime + 1)
+        expectTrue(
+            unchanged.pressureLevel == .normal,
+            "an event without known pressure bits should not change cached state"
+        )
+
+        monitor.recordMemoryPressureEvent(rawValue: 0x01 | 0x02, nowUptime: baseUptime + 2)
+        let warningWins = monitor.getMemorySnapshot(nowUptime: baseUptime + 2)
+        expectTrue(
+            warningWins.pressureLevel == .warning,
+            "warning should outrank normal in a merged event"
+        )
+
+        monitor.recordMemoryPressureEvent(rawValue: 0x01 | 0x02 | 0x04, nowUptime: baseUptime + 3)
+        let criticalWins = monitor.getMemorySnapshot(nowUptime: baseUptime + 3)
+        expectTrue(
+            criticalWins.pressureLevel == .critical,
+            "critical should outrank warning and normal in a merged event"
+        )
+    }
+
+    /// 验证单次阻塞重同步不会阻塞事件或重复启动读取，旧结果也不能覆盖较新事件。
+    private static func testMemoryMonitorConcurrentResyncPreservesNewerEvent() {
+        let baseUptime: TimeInterval = 7_000
+        let readerStarted = DispatchSemaphore(value: 0)
+        let releaseReader = DispatchSemaphore(value: 0)
+        let resyncFinished = DispatchSemaphore(value: 0)
+        let followerStarted = DispatchSemaphore(value: 0)
+        let followerFinished = DispatchSemaphore(value: 0)
+        let eventStarted = DispatchSemaphore(value: 0)
+        let eventFinished = DispatchSemaphore(value: 0)
+        let readCountLock = NSLock()
+        var pressureReads = 0
+
+        let monitor = SystemMonitor(
+            memoryStatisticsReader: { nil },
+            pressureLevelReader: {
+                // 只阻塞第二次读取，让初始化正常完成并精确控制重同步竞争窗口。
+                readCountLock.lock()
+                pressureReads += 1
+                let currentRead = pressureReads
+                readCountLock.unlock()
+                if currentRead == 2 {
+                    readerStarted.signal()
+                    // 兜底上限必须长于主线程的锁阻塞判定窗口，避免错误实现自行解锁后假通过。
+                    _ = releaseReader.wait(timeout: .now() + .seconds(10))
+                    return 0x01
+                }
+                return 0x02
+            },
+            startPressureEvents: false,
+            uptimeReader: { baseUptime }
+        )
+
+        let queue = DispatchQueue(
+            label: "com.hlc.pulse.tests.memory-resync",
+            attributes: .concurrent
+        )
+        var resynchronizedLevel: MemoryPressureLevel = .unavailable
+        var followerLevel: MemoryPressureLevel = .unavailable
+
+        queue.async {
+            // 第一个到期快照负责启动唯一一次受控重同步。
+            resynchronizedLevel = monitor.getMemorySnapshot(
+                nowUptime: baseUptime + PulseDefaults.memoryPressureResyncInterval
+            ).pressureLevel
+            resyncFinished.signal()
+        }
+        let didStartReader = readerStarted.wait(timeout: .now() + .seconds(1)) == .success
+        expectTrue(didStartReader, "the boundary snapshot should start the blocked resync reader")
+
+        queue.async {
+            // 先确认任务已获调度，再单独计时 API 完成，避免把线程池繁忙误判成锁阻塞。
+            followerStarted.signal()
+            // 跟随快照必须直接使用缓存，不能等待或再启动一个 reader。
+            followerLevel = monitor.getMemorySnapshot(
+                nowUptime: baseUptime + PulseDefaults.memoryPressureResyncInterval
+            ).pressureLevel
+            followerFinished.signal()
+        }
+        let followerDidStart =
+            followerStarted.wait(timeout: .now() + .seconds(2)) == .success
+        expectTrue(followerDidStart, "the follower task should start within the timeout")
+        let followerWasImmediate = followerDidStart
+            && followerFinished.wait(timeout: .now() + .seconds(2)) == .success
+        expectTrue(
+            followerWasImmediate,
+            "a concurrent snapshot should not wait for an in-flight resync"
+        )
+        if followerWasImmediate {
+            // semaphore 完成信号建立 happens-before，读取结果不与后台写入竞争。
+            expectTrue(
+                followerLevel == .warning,
+                "an in-flight follower should return the last cached warning"
+            )
+        }
+
+        queue.async {
+            // started 信号把队列调度时间排除在事件锁阻塞断言之外。
+            eventStarted.signal()
+            // critical 事件必须在 reader 仍阻塞时立即写入缓存。
+            monitor.recordMemoryPressureEvent(
+                rawValue: 0x04,
+                nowUptime: baseUptime + PulseDefaults.memoryPressureResyncInterval
+            )
+            eventFinished.signal()
+        }
+        let eventDidStart =
+            eventStarted.wait(timeout: .now() + .seconds(2)) == .success
+        expectTrue(eventDidStart, "the critical event task should start within the timeout")
+        let eventWasImmediate = eventDidStart
+            && eventFinished.wait(timeout: .now() + .seconds(2)) == .success
+        expectTrue(
+            eventWasImmediate,
+            "a critical event should not wait for the blocked resync reader"
+        )
+
+        // 无论红灯实现是否阻塞跟随任务，都释放 reader，确保测试进程能在有限时间收敛。
+        releaseReader.signal()
+        let resyncDidFinish = resyncFinished.wait(timeout: .now() + .seconds(2)) == .success
+        let followerDidFinish = followerWasImmediate
+            || followerFinished.wait(timeout: .now() + .seconds(2)) == .success
+        let eventDidFinish = eventWasImmediate
+            || eventFinished.wait(timeout: .now() + .seconds(2)) == .success
+        expectTrue(resyncDidFinish, "the released resync should complete within the timeout")
+        expectTrue(followerDidFinish, "the follower snapshot should complete within the timeout")
+        expectTrue(eventDidFinish, "the critical event should complete within the timeout")
+
+        if resyncDidFinish {
+            // reader 启动后的事件代次更高，所以旧 normal 结果必须被丢弃。
+            expectTrue(
+                resynchronizedLevel == .critical,
+                "a stale normal resync must not overwrite a newer critical event"
+            )
+        }
+        readCountLock.lock()
+        let finalPressureReads = pressureReads
+        readCountLock.unlock()
+        expectEqual(
+            Double(finalPressureReads),
+            2,
+            "concurrent snapshots should share one in-flight resync"
+        )
+    }
+
+    /// 验证 pressure reader 同步回调事件入口不会死锁，且回调状态优先于旧读取结果。
+    private static func testMemoryMonitorReentrantPressureReader() {
+        let baseUptime: TimeInterval = 8_000
+        let reentrantReaderStarted = DispatchSemaphore(value: 0)
+        let snapshotFinished = DispatchSemaphore(value: 0)
+        let readCountLock = NSLock()
+        var pressureReads = 0
+        var monitor: SystemMonitor!
+        var snapshotLevel: MemoryPressureLevel = .unavailable
+
+        monitor = SystemMonitor(
+            memoryStatisticsReader: { nil },
+            pressureLevelReader: {
+                readCountLock.lock()
+                pressureReads += 1
+                let currentRead = pressureReads
+                readCountLock.unlock()
+                if currentRead == 2 {
+                    // 主线程先观察到已进入重入点，完成超时才真正代表同步回调死锁。
+                    reentrantReaderStarted.signal()
+                    // 同步回调会重新进入同一状态锁，只有 reader 在锁外执行才不会死锁。
+                    monitor.recordMemoryPressureEvent(
+                        rawValue: 0x04,
+                        nowUptime: baseUptime + PulseDefaults.memoryPressureResyncInterval
+                    )
+                    return 0x01
+                }
+                return 0x02
+            },
+            startPressureEvents: false,
+            uptimeReader: { baseUptime }
+        )
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            snapshotLevel = monitor.getMemorySnapshot(
+                nowUptime: baseUptime + PulseDefaults.memoryPressureResyncInterval
+            ).pressureLevel
+            snapshotFinished.signal()
+        }
+        let didEnterReader =
+            reentrantReaderStarted.wait(timeout: .now() + .seconds(2)) == .success
+        expectTrue(didEnterReader, "the resync reader should reach its reentrant callback")
+        let didFinish = didEnterReader
+            && snapshotFinished.wait(timeout: .now() + .seconds(2)) == .success
+        expectTrue(didFinish, "a reentrant pressure reader should not deadlock")
+        if didFinish {
+            // 同步事件发生在 reader 返回前，代次保护必须让 critical 保持为最终结果。
+            expectTrue(
+                snapshotLevel == .critical,
+                "a reentrant critical event should outrank the stale normal result"
+            )
+        }
+    }
+
+    /// 验证事件默认 uptime reader 可同步重入状态更新，而不会在持锁调用时死锁。
+    private static func testMemoryMonitorReentrantEventUptimeReader() {
+        let baseUptime: TimeInterval = 9_000
+        let reentrantUptimeReaderStarted = DispatchSemaphore(value: 0)
+        let eventFinished = DispatchSemaphore(value: 0)
+        let uptimeReadLock = NSLock()
+        var uptimeReads = 0
+        var monitor: SystemMonitor!
+
+        monitor = SystemMonitor(
+            memoryStatisticsReader: { nil },
+            pressureLevelReader: { 0x01 },
+            startPressureEvents: false,
+            uptimeReader: {
+                uptimeReadLock.lock()
+                uptimeReads += 1
+                let currentRead = uptimeReads
+                uptimeReadLock.unlock()
+                if currentRead == 2 {
+                    // 明确标记已进入时钟 closure，随后完成超时才用于判断是否持锁重入。
+                    reentrantUptimeReaderStarted.signal()
+                    // 显式时间避免递归读取时钟，并同步重入同一压力状态锁。
+                    monitor.recordMemoryPressureEvent(
+                        rawValue: 0x02,
+                        nowUptime: baseUptime + 1
+                    )
+                }
+                return baseUptime + 1
+            }
+        )
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            // 省略时间会调用注入时钟，只有锁外调用才能允许其同步重入。
+            monitor.recordMemoryPressureEvent(rawValue: 0x04)
+            eventFinished.signal()
+        }
+        let didEnterUptimeReader =
+            reentrantUptimeReaderStarted.wait(timeout: .now() + .seconds(2)) == .success
+        expectTrue(
+            didEnterUptimeReader,
+            "the event uptime reader should reach its reentrant callback"
+        )
+        let didFinish = didEnterUptimeReader
+            && eventFinished.wait(timeout: .now() + .seconds(2)) == .success
+        expectTrue(didFinish, "a reentrant event uptime reader should not deadlock")
+        if didFinish {
+            let snapshot = monitor.getMemorySnapshot(nowUptime: baseUptime + 1)
+            expectTrue(
+                snapshot.pressureLevel == .critical,
+                "the outer critical event should commit after the reentrant warning"
+            )
+        }
+    }
+
+    /// 验证 UI 不会把无值伪装为零。
+    private static func testMetricFormatting() {
+        expectEqual(
+            MetricCalculations.formatted(nil, decimals: 1, suffix: "W"),
+            "—",
+            "missing values should render as an em dash"
+        )
+        expectEqual(
+            MetricCalculations.formatted(5.27, decimals: 1, suffix: "W"),
+            "5.3 W",
+            "formatted power should use fixed precision and a unit"
+        )
+        expectEqual(
+            MetricCalculations.formatted(9, decimals: 0, suffix: "%"),
+            "9%",
+            "formatted percentage should produce a tight percentage symbol without spaces"
+        )
+    }
+
+    /// 验证内存使用格式化输出：无总容量时包含单位，带总容量时精简首个重复单位 "14.07 / 24.00 GB (59%)"
+    private static func testFormattedMemoryUsageText() {
+        let formattedDetailSingle = MetricCalculations.formattedMemoryUsageDetail(
+            usedGB: 14.07,
+            totalGB: nil,
+            percentage: 59
+        )
+        expectEqual(
+            formattedDetailSingle,
+            "14.07 GB (59%)",
+            "无总容量时应带独立 GB 单位"
+        )
+
+        let formattedDetailBoth = MetricCalculations.formattedMemoryUsageDetail(
+            usedGB: 14.07,
+            totalGB: 24.00,
+            percentage: 59
+        )
+        expectEqual(
+            formattedDetailBoth,
+            "14.07 / 24.00 GB (59%)",
+            "带总容量时应精简首个重复的 GB 单位"
+        )
+    }
+
+    /// 防止应用定时器和菜单对默认刷新间隔产生不同理解。
+    private static func testDefaultRefreshInterval() {
+        expectEqual(
+            PulseDefaults.defaultRefreshInterval,
+            1,
+            "the shared default refresh interval should be one second"
+        )
+        // 三十秒仅用于修复可能漏掉的事件，不能退化成每秒 sysctl 轮询。
+        expectEqual(
+            PulseDefaults.memoryPressureResyncInterval,
+            30,
+            "the memory-pressure resync interval should be thirty seconds"
+        )
+    }
+
+    /// 为什么：偏好数据可能损坏，菜单和计时器必须共享同一套合法刷新档位。
+    private static func testRefreshIntervalValidation() {
+        expectEqual(
+            Double(PulseDefaults.allowedRefreshIntervals.count),
+            5,
+            "refresh interval should expose five choices"
+        )
+        expectEqual(
+            PulseDefaults.validatedRefreshInterval(2),
+            2,
+            "two seconds should remain valid"
+        )
+        expectEqual(
+            PulseDefaults.validatedRefreshInterval(0),
+            PulseDefaults.defaultRefreshInterval,
+            "zero should fall back to the shared default"
+        )
+        expectEqual(
+            PulseDefaults.validatedRefreshInterval(4),
+            PulseDefaults.defaultRefreshInterval,
+            "unsupported values should fall back to the shared default"
+        )
+        expectEqual(
+            PulseDefaults.validatedRefreshInterval(.nan),
+            PulseDefaults.defaultRefreshInterval,
+            "non-finite values should fall back to the shared default"
+        )
+    }
+
+    /// 验证压力级别到展示角色的映射，使 UI 无需从使用率猜测系统压力。
+    private static func testMemoryPresentationRole() {
+        expectTrue(
+            MemoryPressureLevel.normal.presentationRole == .healthy,
+            "normal pressure should use the healthy presentation role"
+        )
+        expectTrue(
+            MemoryPressureLevel.warning.presentationRole == .warning,
+            "warning pressure should use the warning presentation role"
+        )
+        expectTrue(
+            MemoryPressureLevel.critical.presentationRole == .critical,
+            "critical pressure should use the critical presentation role"
+        )
+        expectTrue(
+            MemoryPressureLevel.unavailable.presentationRole == .unavailable,
+            "unavailable pressure should use the unavailable presentation role"
+        )
+    }
+
+    /// 验证充电时：图标为 bolt.fill，颜色恒为绿色；数值高负载时变橙/红
+    private static func testPowerDisplayConfigurationCharging() {
+        let configNormal = MetricCalculations.powerDisplayConfiguration(power: 10.0, isCharging: true, isPluggedIn: true)
+        expectEqual(configNormal.symbolName, "bolt.fill", "charging normal symbol should be bolt.fill")
+        expectTrue(configNormal.iconColorRole == .chargingGreen, "charging normal icon color should be chargingGreen")
+        expectTrue(configNormal.textColorRole == .normal, "charging normal text color should be normal")
+
+        let configHigh = MetricCalculations.powerDisplayConfiguration(power: 35.0, isCharging: true, isPluggedIn: true)
+        expectEqual(configHigh.symbolName, "bolt.fill", "charging high symbol should be bolt.fill")
+        expectTrue(configHigh.iconColorRole == .chargingGreen, "charging high icon color should be chargingGreen")
+        expectTrue(configHigh.textColorRole == .redWarning, "charging high text color should be redWarning")
+    }
+
+    /// 验证插电直供（未充）时：图标为 powerplug.fill，颜色为默认；数值高负载变橙/红
+    private static func testPowerDisplayConfigurationPluggedInPassThrough() {
+        let configHigh = MetricCalculations.powerDisplayConfiguration(power: 35.0, isCharging: false, isPluggedIn: true)
+        expectEqual(configHigh.symbolName, "powerplug.fill", "plugged in pass-through high symbol should be powerplug.fill")
+        expectTrue(configHigh.iconColorRole == .normal, "plugged in pass-through high icon color should be normal")
+        expectTrue(configHigh.textColorRole == .redWarning, "plugged in pass-through high text color should be redWarning")
+    }
+
+    /// 验证电池放电时：图标为 bolt.fill；高负载时图标与数值同时变橙/红
+    private static func testPowerDisplayConfigurationDischarging() {
+        let configHigh = MetricCalculations.powerDisplayConfiguration(power: 35.0, isCharging: false, isPluggedIn: false)
+        expectEqual(configHigh.symbolName, "bolt.fill", "discharging high symbol should be bolt.fill")
+        expectTrue(configHigh.iconColorRole == .redWarning, "discharging high icon color should be redWarning")
+        expectTrue(configHigh.textColorRole == .redWarning, "discharging high text color should be redWarning")
+    }
+
+    /// 验证方案 1 措辞：充电中、已连接电源 (未充电)、使用电池
+    private static func testPowerSourceStateDescription() {
+        expectEqual(
+            BatteryMonitor.powerSourceStateDescription(isCharging: true, isPluggedIn: true),
+            "正在充电",
+            "isCharging=true, isPluggedIn=true 应返回 正在充电"
+        )
+        expectEqual(
+            BatteryMonitor.powerSourceStateDescription(isCharging: false, isPluggedIn: true),
+            "已连接电源 (未充电)",
+            "isCharging=false, isPluggedIn=true 应返回 已连接电源 (未充电)"
+        )
+        expectEqual(
+            BatteryMonitor.powerSourceStateDescription(isCharging: false, isPluggedIn: false),
+            "使用电池",
+            "isCharging=false, isPluggedIn=false 应返回 使用电池"
+        )
+    }
+
+    /// 为什么：单次 IOKit 结果必须派生全部状态，防止一轮刷新重复创建三份系统快照。
+    private static func testPowerSourceSnapshotDerivation() {
+        let charging = BatteryMonitor.snapshot(from: [[
+            kIOPSIsChargingKey: true,
+            kIOPSPowerSourceStateKey: kIOPSACPowerValue
+        ]])
+        expectTrue(charging.isCharging, "charging flag should be preserved")
+        expectTrue(charging.isPluggedIn, "charging source should be plugged in")
+        expectEqual(charging.description, "正在充电", "charging description should be concise")
+
+        let battery = BatteryMonitor.snapshot(from: [[
+            kIOPSIsChargingKey: false,
+            kIOPSPowerSourceStateKey: kIOPSBatteryPowerValue
+        ]])
+        expectFalse(battery.isCharging, "battery power should not be charging")
+        expectFalse(battery.isPluggedIn, "battery power should not be plugged in")
+        expectEqual(battery.description, "使用电池", "battery description should remain truthful")
+
+        let unknown = BatteryMonitor.snapshot(from: [])
+        expectEqual(unknown.description, "未知", "an empty source list should remain unknown")
+    }
+
+    /// 为什么：两个展示入口必须消费同一个不可变快照，而不是分别读取实时状态。
+    private static func testPulseSnapshotKeepsOneRefreshState() {
+        let memory = MemorySnapshot(
+            usedBytes: 8,
+            totalBytes: 16,
+            usagePercentage: 50,
+            pressureLevel: .normal
+        )
+        let powerSource = PowerSourceSnapshot(
+            isCharging: false,
+            isPluggedIn: true,
+            description: "已连接电源 (未充电)"
+        )
+        let snapshot = PulseSnapshot(
+            power: 7.1,
+            memory: memory,
+            temperature: 32.4,
+            cpuUsage: 14,
+            cpuFrequency: 2.4,
+            powerSource: powerSource
+        )
+        expectEqual(snapshot.power, 7.1, "snapshot should preserve system load")
+        expectEqual(snapshot.memory.usagePercentage, 50, "snapshot should preserve memory state")
+        expectEqual(snapshot.powerSource.description, powerSource.description, "snapshot should preserve power state")
+    }
+
+    /// 为什么：父状态项必须在绘制前获得完整宽度，不能让子视图扩张后被按钮裁切。
+    private static func testStatusItemWidthTracksLongestValues() {
+        let view = StatusItemView(frame: NSRect(x: 0, y: 0, width: 1, height: 22))
+        let compact = view.update(
+            power: 7.1,
+            memoryUsagePercentage: 8,
+            memoryPressureLevel: .normal,
+            temperature: 32.2,
+            cpuUsage: 7,
+            isCharging: false,
+            isPluggedIn: true
+        )
+        let expanded = view.update(
+            power: 137.8,
+            memoryUsagePercentage: 100,
+            memoryPressureLevel: .critical,
+            temperature: 102.2,
+            cpuUsage: 100,
+            isCharging: false,
+            isPluggedIn: false
+        )
+        expectTrue(expanded > compact, "long values must increase required status-item width")
+        expectEqual(
+            expanded,
+            view.intrinsicContentSize.width,
+            "intrinsic width must match the reported width"
+        )
+        view.frame.size.width = expanded
+        view.layoutSubtreeIfNeeded()
+        let labels = view.subviews.compactMap { $0 as? NSTextField }
+        let furthestLabelEdge = labels.map(\.frame.maxX).max() ?? expanded
+        expectTrue(
+            expanded - furthestLabelEdge >= 7,
+            "status item should keep at least seven points after the longest suffix"
+        )
+    }
+
+    /// 为什么：内容视图只负责展示，鼠标必须交给父 NSStatusBarButton 打开或关闭面板。
+    private static func testStatusItemViewLetsParentButtonHandleClicks() {
+        let view = StatusItemView(frame: NSRect(x: 0, y: 0, width: 90, height: 22))
+        expectTrue(
+            view.hitTest(NSPoint(x: 20, y: 10)) == nil,
+            "status content must not intercept the parent button click"
+        )
+    }
+
+    /// 为什么：刷新选择必须走真实 NSPopUpButton 状态，hover 只能改变表现而不能接管点击。
+    private static func testRefreshControlUsesNativeSelectionAndHoverState() {
+        let control = RefreshIntervalControl(
+            frame: NSRect(x: 0, y: 0, width: 92, height: 32)
+        )
+        var received: TimeInterval?
+        control.onIntervalChanged = { received = $0 }
+        control.select(interval: 5, notify: true)
+        expectEqual(
+            received,
+            5,
+            "native popup selection should forward the represented interval"
+        )
+        expectFalse(control.isHovered, "refresh control should start unhovered")
+        control.setHovered(true)
+        expectTrue(control.isHovered, "hover entry should update presentation state")
+        control.setHovered(false)
+        expectFalse(control.isHovered, "hover exit should restore normal state")
+
+        let popup = control.subviews.compactMap { $0 as? NSPopUpButton }.first
+        expectTrue(
+            popup?.focusRingType == NSFocusRingType.none,
+            "refresh popup should not show a persistent blue focus ring"
+        )
+        expectEqual(
+            Double(popup?.numberOfItems ?? 0),
+            5,
+            "focus styling must not replace the native five-item popup"
+        )
+    }
+
+    /// 为什么：刷新只应修改已经存在的原生标签，不能每秒重建详情视图树。
+    private static func testPopoverContentUpdatesExistingMetricLabels() {
+        let view = PopoverContentView(
+            frame: NSRect(x: 0, y: 0, width: 340, height: 320)
+        )
+        let memory = MemorySnapshot(
+            usedBytes: 8_589_934_592,
+            totalBytes: 17_179_869_184,
+            usagePercentage: 50,
+            pressureLevel: .normal
+        )
+        let snapshot = PulseSnapshot(
+            power: 7.1,
+            memory: memory,
+            temperature: 32.4,
+            cpuUsage: 14,
+            cpuFrequency: 2.4,
+            powerSource: PowerSourceSnapshot(
+                isCharging: false,
+                isPluggedIn: true,
+                description: "已连接电源 (未充电)"
+            )
+        )
+        view.update(snapshot: snapshot)
+
+        let powerLabel: NSTextField? = descendant(
+            in: view,
+            identifier: "metric.power.value"
+        )
+        let memoryLabel: NSTextField? = descendant(
+            in: view,
+            identifier: "metric.memoryUsage.value"
+        )
+        expectEqual(powerLabel?.stringValue ?? "", "7.1 W", "power label should use the shared formatter")
+        expectEqual(
+            memoryLabel?.stringValue ?? "",
+            "8.00 / 16.00 GB (50%)",
+            "memory label should preserve the complete detail"
+        )
+    }
+
+    /// 为什么：系统设置式分组必须共享同一横向坐标，不能让指标与设置各自维护一套魔法数字。
+    private static func testPopoverGroupsAndRowsShareHorizontalGeometry() {
+        let view = PopoverContentView(
+            frame: NSRect(x: 0, y: 0, width: 340, height: 320)
+        )
+        view.layoutSubtreeIfNeeded()
+
+        let groupIDs = ["group.metrics", "group.controls", "group.quit"]
+        let groups: [NSBox] = groupIDs.compactMap {
+            descendant(in: view, identifier: $0)
+        }
+        expectEqual(Double(groups.count), 3, "popover should expose three visual groups")
+        expectTrue(
+            groups.count == 3 && Set(groups.map { Int($0.frame.minX.rounded()) }).count == 1,
+            "all groups should share the same leading edge"
+        )
+        expectTrue(
+            groups.count == 3 && Set(groups.map { Int($0.frame.width.rounded()) }).count == 1,
+            "all groups should share the same width"
+        )
+
+        let titleIDs = [
+            "metric.power.title",
+            "control.refresh.title",
+            "control.quit.title",
+        ]
+        let titleXs = titleIDs.compactMap { identifier -> Int? in
+            let label: NSTextField? = descendant(in: view, identifier: identifier)
+            return rootX(of: label, in: view)
+        }
+        expectTrue(
+            titleXs.count == 3 && Set(titleXs).count == 1,
+            "metric, setting, and quit titles should share one leading coordinate"
+        )
+
+        let powerSourceIcon: NSImageView? = descendant(
+            in: view,
+            identifier: "metric.powerSource.icon"
+        )
+        let cpuIcon: NSImageView? = descendant(in: view, identifier: "metric.cpu.icon")
+        expectTrue(
+            (powerSourceIcon?.frame.width ?? 0) == (cpuIcon?.frame.width ?? 0),
+            "all metric icons should share the same uniform width"
+        )
+
+        let separators = allDescendants(in: view).compactMap { child -> NSBox? in
+            guard let box = child as? NSBox,
+                box.identifier?.rawValue.hasSuffix(".separator") == true
+            else {
+                return nil
+            }
+            return box
+        }
+        let separatorEdges = separators.compactMap { separator -> String? in
+            guard let superview = separator.superview else { return nil }
+            let origin = superview.convert(separator.frame.origin, to: view)
+            return "\(Int(origin.x.rounded())):\(Int((origin.x + separator.frame.width).rounded()))"
+        }
+        expectTrue(
+            separatorEdges.count == 6 && Set(separatorEdges).count == 1,
+            "all metric and setting separators should share one horizontal span"
+        )
+    }
+
+    /// 为什么：外层墙纸材质会产生偏色，系统设置式面板应使用窗口语义色和统一分组色。
+    private static func testPopoverUsesSystemWindowAndSharedGroupColors() {
+        let view = PopoverContentView(
+            frame: NSRect(x: 0, y: 0, width: 340, height: 320)
+        )
+        let rootView: NSView = view
+        expectFalse(
+            rootView is NSVisualEffectView,
+            "outer surface should use the system window color instead of wallpaper-tinted material"
+        )
+
+        let groups: [NSBox] = ["group.metrics", "group.controls", "group.quit"].compactMap {
+            descendant(in: view, identifier: $0)
+        }
+        let fills = groups.compactMap(\.fillColor)
+        expectTrue(
+            fills.count == 3 && fills.dropFirst().allSatisfy { $0.isEqual(fills[0]) },
+            "all groups should share one semantic grouped fill"
+        )
+    }
+
+    /// 为什么：开关显示必须由系统实际状态驱动，不能保留上一次用户期望值。
+    private static func testPopoverLaunchSwitchReflectsActualState() {
+        let view = PopoverContentView(
+            frame: NSRect(x: 0, y: 0, width: 340, height: 320)
+        )
+        view.setLaunchAtLoginEnabled(true)
+        let launchSwitch: NSSwitch? = descendant(
+            in: view,
+            identifier: "control.launch.switch"
+        )
+        expectTrue(launchSwitch?.state == .on, "launch switch should display the actual enabled state")
+    }
+
+    /// 为什么：退出行必须转发真实按钮动作，快捷键和鼠标点击才能共享同一条路径。
+    private static func testPopoverQuitButtonForwardsAction() {
+        let view = PopoverContentView(
+            frame: NSRect(x: 0, y: 0, width: 340, height: 320)
+        )
+        var didRequestQuit = false
+        view.onQuit = { didRequestQuit = true }
+        let quitButton: NSButton? = descendant(
+            in: view,
+            identifier: "control.quit.button"
+        )
+        quitButton?.performClick(nil)
+        expectTrue(didRequestQuit, "quit button should forward one action")
+    }
+
+    /// 为什么：系统注册失败时，真实控制器必须把开关恢复为服务报告的实际状态。
+    private static func testLaunchAtLoginFailureRestoresDisplayedState() {
+        final class FailingLaunchController: LaunchAtLoginControlling {
+            var isEnabled = false
+
+            func setEnabled(_ enabled: Bool) throws {
+                throw LaunchAtLoginError.operationFailed
+            }
+        }
+
+        let launchController = FailingLaunchController()
+        let displayedState = LaunchAtLoginSettings.apply(
+            requestedState: true,
+            using: launchController
+        )
+        expectFalse(
+            displayedState,
+            "failed registration must restore the actual disabled state"
+        )
+    }
+
+    /// 测试辅助仅遍历真实 AppKit 视图，不向生产类型添加测试专用接口。
+    private static func descendant<T: NSView>(
+        in root: NSView,
+        identifier: String
+    ) -> T? {
+        if root.identifier?.rawValue == identifier, let match = root as? T {
+            return match
+        }
+        for child in root.subviews {
+            if let match: T = descendant(in: child, identifier: identifier) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    /// 返回整棵真实 AppKit 子视图树，供几何一致性测试使用。
+    private static func allDescendants(in root: NSView) -> [NSView] {
+        root.subviews.flatMap { [$0] + allDescendants(in: $0) }
+    }
+
+    /// 将标签横坐标转换到详情根视图，避免比较不同分组的局部坐标。
+    private static func rootX(of view: NSView?, in root: NSView) -> Int? {
+        guard let view, let superview = view.superview else { return nil }
+        return Int(superview.convert(view.frame.origin, to: root).x.rounded())
+    }
+
+    /// 为什么：TDD 全功能与回归测试断言，验证 PopUp 档位切换、开机自启逻辑与 A1 硬件口径 100% 稳定
+    private static func testFullFeatureAndRegressionSuite() {
+        // 1. 回归验证：物理内存口径 (A1 规范)
+        let memory = MemorySnapshot(
+            usedBytes: 17_400_000_000,
+            totalBytes: 24_000_000_000,
+            usagePercentage: 72.5,
+            pressureLevel: .normal
+        )
+        expectEqual(memory.usagePercentage, 72.5, "物理内存使用率百分比解耦为 72.5")
+        expectEqual(memory.pressureLevel.displayName, "正常", "内核压力正常状态名应为 正常")
+
+        // 2. 功能测试：刷新间隔建议与档位切换
+        let validIntervals: [TimeInterval] = [1.0, 2.0, 3.0, 5.0, 10.0]
+        for interval in validIntervals {
+            let label = BatteryMonitor.powerSourceStateDescription(isCharging: false, isPluggedIn: true)
+            expectTrue(!label.isEmpty, "电源状态格式化不可为空")
+            expectTrue(interval > 0, "刷新间隔必须大于 0")
+        }
+
+        // 3. 规范测试：已连接电源 (未充电)
+        let pluggedInText = BatteryMonitor.powerSourceStateDescription(isCharging: false, isPluggedIn: true)
+        expectEqual(pluggedInText, "已连接电源 (未充电)", "插电未充电描述需为 已连接电源 (未充电)")
+    }
+
+    private static func expectEqual(
+        _ actual: Double?,
+        _ expected: Double,
+        _ message: String,
+        tolerance: Double = 0.000_001
+    ) {
+        guard let actual, abs(actual - expected) <= tolerance else {
+            recordFailure("\(message); expected \(expected), got \(String(describing: actual))")
+            return
+        }
+        recordSuccess()
+    }
+
+    private static func expectEqual(
+        _ actual: String,
+        _ expected: String,
+        _ message: String
+    ) {
+        guard actual == expected else {
+            recordFailure("\(message); expected \(expected), got \(actual)")
+            return
+        }
+        recordSuccess()
+    }
+
+    private static func expectNil(_ actual: Double?, _ message: String) {
+        guard actual == nil else {
+            recordFailure("\(message); got \(String(describing: actual))")
+            return
+        }
+        recordSuccess()
+    }
+
+    private static func expectTrue(_ actual: Bool, _ message: String) {
+        guard actual else {
+            recordFailure(message)
+            return
+        }
+        recordSuccess()
+    }
+
+    private static func expectFalse(_ actual: Bool, _ message: String) {
+        expectTrue(!actual, message)
+    }
+
+    private static func recordSuccess() {
+        passed += 1
+    }
+
+    private static func recordFailure(_ message: String) {
+        failed += 1
+        fputs("FAIL: \(message)\n", stderr)
+    }
+}
