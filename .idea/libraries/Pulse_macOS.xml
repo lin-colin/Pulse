@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="Pulse_macOS">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/release/Pulse_macOS.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

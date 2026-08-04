@@ -44,7 +44,8 @@ swiftc \
     "$SOURCE_DIR/Services/HardwareMonitor.swift" \
     "$SOURCE_DIR/Services/SystemMonitor.swift" \
     "$SOURCE_DIR/Services/BatteryMonitor.swift" \
-    "$SOURCE_DIR/Services/LaunchAtLoginController.swift"
+    "$SOURCE_DIR/Services/LaunchAtLoginController.swift" \
+    "$SOURCE_DIR/Services/UpdateChecker.swift"
 
 # 复制配置文件和资源
 cp "$SOURCE_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"

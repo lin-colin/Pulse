@@ -16,7 +16,7 @@ final class StatusBarController: NSObject {
     private var localClickMonitor: Any?
 
     private static let panelWidth: CGFloat = 340
-    private static let panelHeight: CGFloat = 392
+    private static let collapsedHeight: CGFloat = 432
 
     var onRefreshIntervalChanged: ((TimeInterval) -> Void)?
 
@@ -27,10 +27,10 @@ final class StatusBarController: NSObject {
             frame: NSRect(x: 0, y: 0, width: 80, height: 22)
         )
         contentView = PopoverContentView(
-            frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight)
+            frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.collapsedHeight)
         )
         panel = StatusPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight),
+            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.collapsedHeight),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: true
@@ -88,7 +88,7 @@ final class StatusBarController: NSObject {
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
 
         let visualEffect = NSVisualEffectView(
-            frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight)
+            frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.collapsedHeight)
         )
         visualEffect.autoresizingMask = [.width, .height]
         visualEffect.material = .popover
@@ -153,7 +153,23 @@ final class StatusBarController: NSObject {
         contentView.onQuit = {
             NSApplication.shared.terminate(nil)
         }
+        contentView.onPanelHeightChanged = { [weak self] newHeight in
+            self?.updatePanelHeight(newHeight)
+        }
+        contentView.onCheckUpdate = {
+            UpdateChecker.checkForUpdate { result in
+                UpdateChecker.showUpdateAlert(result: result)
+            }
+        }
         contentView.setLaunchAtLoginEnabled(launchController.isEnabled)
+    }
+
+    private func updatePanelHeight(_ newHeight: CGFloat) {
+        var frame = panel.frame
+        let delta = newHeight - frame.height
+        frame.origin.y -= delta
+        frame.size.height = newHeight
+        panel.setFrame(frame, display: true, animate: true)
     }
 
     @objc private func togglePanel(_ sender: NSStatusBarButton) {

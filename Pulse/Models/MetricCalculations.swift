@@ -197,16 +197,19 @@ struct PowerDisplayConfig {
 }
 
 extension MetricCalculations {
-    /// 计算功耗图标与颜色的纯函数，解决充电指示与高功耗告警的色彩解耦
+    /// 计算功耗图标与颜色的纯函数，解决充电指示与高功耗告警的色彩解耦。
+    /// 阈值参数化，支持用户自定义触发点。
     static func powerDisplayConfiguration(
         power: Double?,
         isCharging: Bool,
-        isPluggedIn: Bool
+        isPluggedIn: Bool,
+        orangeThreshold: Double = 18.0,
+        redThreshold: Double = 30.0
     ) -> PowerDisplayConfig {
         let valueRole: ColorRole
-        if let power, power >= 30.0 {
+        if let power, power >= redThreshold {
             valueRole = .redWarning
-        } else if let power, power >= 18.0 {
+        } else if let power, power >= orangeThreshold {
             valueRole = .orangeWarning
         } else {
             valueRole = .normal

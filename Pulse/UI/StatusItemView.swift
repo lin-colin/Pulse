@@ -211,10 +211,14 @@ final class StatusItemView: NSView {
         isPluggedIn: Bool
     ) {
         let baseColor = NSColor.labelColor
+        let thresholds = ThresholdConfig.load()
+
         let powerConfiguration = MetricCalculations.powerDisplayConfiguration(
             power: power,
             isCharging: isCharging,
-            isPluggedIn: isPluggedIn
+            isPluggedIn: isPluggedIn,
+            orangeThreshold: thresholds.power.orange,
+            redThreshold: thresholds.power.red
         )
         powerIcon.image = symbolImage(named: powerConfiguration.symbolName)
         powerIcon.contentTintColor = powerConfiguration.iconColorRole.toNSColor(
@@ -225,9 +229,9 @@ final class StatusItemView: NSView {
         )
 
         let temperatureColor: NSColor
-        if let temperature, temperature >= 40 {
+        if let temperature, temperature >= thresholds.temperature.red {
             temperatureColor = .systemRed
-        } else if let temperature, temperature >= 35 {
+        } else if let temperature, temperature >= thresholds.temperature.orange {
             temperatureColor = .systemOrange
         } else {
             temperatureColor = baseColor
@@ -246,9 +250,9 @@ final class StatusItemView: NSView {
         memoryLabel.textColor = memoryColor
 
         let cpuColor: NSColor
-        if cpuUsage >= 80 {
+        if cpuUsage >= thresholds.cpu.red {
             cpuColor = .systemRed
-        } else if cpuUsage >= 60 {
+        } else if cpuUsage >= thresholds.cpu.orange {
             cpuColor = .systemOrange
         } else {
             cpuColor = baseColor
