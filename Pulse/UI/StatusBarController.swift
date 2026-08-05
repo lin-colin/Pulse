@@ -1,68 +1,111 @@
 import AppKit
 
-/// 无边框面板子类；覆盖 canBecomeKey 使内部 NSSwitch 等控件渲染激活态蓝色。
-private final class StatusPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-}
+typealias PanelSessionFactory = (PanelSessionConfiguration) -> PanelSessionControlling
 
-/// 管理一个动态宽度状态项与一个无边框原生面板。
+/// 管理原生菜单栏状态项并根据需要创建或释放详情面板 Session。
 final class StatusBarController: NSObject {
-    private let statusItem: NSStatusItem
-    private let customView: StatusItemView
-    private let panel: StatusPanel
-    private let contentView: PopoverContentView
-    private let launchController: LaunchAtLoginControlling
-    private var globalClickMonitor: Any?
-    private var localClickMonitor: Any?
+    private struct StatusItemRenderKey: Equatable {
+        let model: StatusItemRenderModel
+        let appearanceName: String
+        let backingScaleFactor: CGFloat
+    }
 
-    private static let panelWidth: CGFloat = 340
-    private static let collapsedHeight: CGFloat = 432
+    private let statusItemHost: StatusItemHosting
+    private let launchController: LaunchAtLoginControlling
+    private let statusRenderer: StatusItemRendering
+    private let panelSessionFactory: PanelSessionFactory
+    private var panelSession: PanelSessionControlling?
+    private var thresholdConfig: ThresholdConfig
+    private var currentRefreshInterval: TimeInterval = PulseDefaults.defaultRefreshInterval
+    private var latestSnapshot: PulseSnapshot?
+    private var lastRenderKey: StatusItemRenderKey?
+    private var lastRenderedWidth: CGFloat?
 
     var onRefreshIntervalChanged: ((TimeInterval) -> Void)?
 
-    init(launchController: LaunchAtLoginControlling = LaunchAtLoginController()) {
+    init(
+        statusItemHost: StatusItemHosting = SystemStatusItemHost(),
+        launchController: LaunchAtLoginControlling = LaunchAtLoginController(),
+        statusRenderer: StatusItemRendering = StatusItemRenderer(),
+        panelSessionFactory: @escaping PanelSessionFactory = PanelSession.make,
+        thresholdConfig: ThresholdConfig = .load()
+    ) {
+        self.statusItemHost = statusItemHost
         self.launchController = launchController
-        statusItem = NSStatusBar.system.statusItem(withLength: 80)
-        customView = StatusItemView(
-            frame: NSRect(x: 0, y: 0, width: 80, height: 22)
-        )
-        contentView = PopoverContentView(
-            frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.collapsedHeight)
-        )
-        panel = StatusPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.collapsedHeight),
-            styleMask: [.nonactivatingPanel, .borderless],
-            backing: .buffered,
-            defer: true
-        )
+        self.statusRenderer = statusRenderer
+        self.panelSessionFactory = panelSessionFactory
+        // 为什么：初始化阶段只加载一次 ThresholdConfig，作为控制器的内存单一真相来源，禁止在刷新热路径每次读取 UserDefaults。
+        self.thresholdConfig = thresholdConfig
         super.init()
-        configurePanel()
-        configureStatusButton()
-        bindActions()
+        configureStatusHost()
+        self.statusItemHost.onRenderEnvironmentChanged = { [weak self] in
+            self?.renderLatestSnapshot(force: true)
+        }
     }
 
     deinit {
-        removeClickMonitors()
-        NSStatusBar.system.removeStatusItem(statusItem)
+        // 为什么：析构时显式关闭 session 并注销 statusItemHost，确保环境彻底干净。
+        panelSession?.close()
+        panelSession = nil
+        statusItemHost.remove()
     }
 
-    /// 同一快照同时更新菜单栏与详情，并先同步父状态项宽度防止裁切。
+    /// 为什么：根据当前快照构造纯模型并对比上次 Key。只有模型、外观或 scale 改变时才生成新位图；
+    /// 仅当面板存在且可见时才更新详情内容，消除面板隐藏时的无效界面渲染。
     func update(snapshot: PulseSnapshot) {
-        let requiredWidth = customView.update(
-            power: snapshot.power,
-            memoryUsagePercentage: snapshot.memory.usagePercentage,
-            memoryPressureLevel: snapshot.memory.pressureLevel,
-            temperature: snapshot.temperature,
-            cpuUsage: snapshot.cpuUsage,
-            isCharging: snapshot.powerSource.isCharging,
-            isPluggedIn: snapshot.powerSource.isPluggedIn
+        latestSnapshot = snapshot
+        renderLatestSnapshot()
+
+        // 为什么：仅在 PanelSession 存在且可见时更新详情面板；关闭时零更新开销。
+        if panelSession?.isVisible == true {
+            panelSession?.update(snapshot: snapshot)
+        }
+    }
+
+    private func renderLatestSnapshot(force: Bool = false) {
+        // 为什么：只在 statusItemHost 已真实挂接至托管窗口时才生成位图。
+        // 避免在冷启动阶段使用缺省/未绑定的浅色外观生成黑字 bitmap。
+        guard let snapshot = latestSnapshot,
+              statusItemHost.isAttachedToWindow else {
+            return
+        }
+
+        let model = StatusItemRenderModel.make(snapshot: snapshot, thresholds: thresholdConfig)
+        let appearance = statusItemHost.effectiveAppearance
+        let appearanceName = appearance.name.rawValue
+        let scale = statusItemHost.backingScaleFactor
+        let renderKey = StatusItemRenderKey(
+            model: model,
+            appearanceName: appearanceName,
+            backingScaleFactor: scale
         )
-        statusItem.length = requiredWidth
-        contentView.update(snapshot: snapshot)
+
+        // 去重逻辑：强刷新或渲染 Key 变化时重新调用 CoreGraphics 栅格化绘制
+        if force || renderKey != lastRenderKey {
+            if let rendered = statusRenderer.render(
+                model: model,
+                appearance: appearance,
+                backingScaleFactor: scale
+            ) {
+                statusItemHost.image = rendered.image
+
+                let newWidth = rendered.geometry.canvasSize.width
+                if let lastWidth = lastRenderedWidth {
+                    if abs(newWidth - lastWidth) > 0.5 {
+                        statusItemHost.length = newWidth
+                        lastRenderedWidth = newWidth
+                    }
+                } else {
+                    statusItemHost.length = newWidth
+                    lastRenderedWidth = newWidth
+                }
+                lastRenderKey = renderKey
+            }
+        }
     }
 
     func setRefreshInterval(_ interval: TimeInterval) {
-        contentView.setRefreshInterval(interval)
+        currentRefreshInterval = interval
     }
 
     /// 为什么：无论系统操作成功或失败，都以服务重新报告的真实状态覆盖用户期望状态。
@@ -74,185 +117,69 @@ final class StatusBarController: NSObject {
                 NSLog("Pulse 开机启动设置失败: %@", String(describing: error))
             }
         )
-        contentView.setLaunchAtLoginEnabled(actualState)
+        panelSession?.setLaunchAtLoginEnabled(actualState)
     }
 
-    private func configurePanel() {
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .statusBar
-        panel.isMovableByWindowBackground = false
-        panel.hidesOnDeactivate = false
-        panel.isFloatingPanel = true
-        panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+    func togglePanelForTesting() {
+        togglePanel(self)
+    }
 
-        let visualEffect = NSVisualEffectView(
-            frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.collapsedHeight)
+    private func configureStatusHost() {
+        statusItemHost.configure(
+            target: self,
+            action: #selector(togglePanel(_:)),
+            accessibilityLabel: "Pulse 硬件心跳"
         )
-        visualEffect.autoresizingMask = [.width, .height]
-        visualEffect.material = .popover
-        visualEffect.state = .active
-        // maskImage 对 NSVisualEffectView 的材质效果做圆角裁切，
-        // 避免 layer.masksToBounds 无法裁切底层 compositing 导致的白色直角。
-        visualEffect.maskImage = Self.roundedRectMask(cornerRadius: 12)
-
-        contentView.frame = visualEffect.bounds
-        contentView.autoresizingMask = [.width, .height]
-        visualEffect.addSubview(contentView)
-
-        panel.contentView = visualEffect
     }
 
-    /// 生成可拉伸的九宫格圆角蒙版，用于 NSVisualEffectView.maskImage。
-    private static func roundedRectMask(cornerRadius: CGFloat) -> NSImage {
-        let edgeLength = cornerRadius * 2 + 1
-        let size = NSSize(width: edgeLength, height: edgeLength)
-        let image = NSImage(size: size, flipped: false) { rect in
-            let path = NSBezierPath(
-                roundedRect: rect,
-                xRadius: cornerRadius,
-                yRadius: cornerRadius
-            )
-            NSColor.black.setFill()
-            path.fill()
-            return true
-        }
-        image.capInsets = NSEdgeInsets(
-            top: cornerRadius,
-            left: cornerRadius,
-            bottom: cornerRadius,
-            right: cornerRadius
-        )
-        image.resizingMode = .stretch
-        return image
-    }
-
-    private func configureStatusButton() {
-        guard let button = statusItem.button else { return }
-        customView.translatesAutoresizingMaskIntoConstraints = false
-        button.addSubview(customView)
-        NSLayoutConstraint.activate([
-            customView.leadingAnchor.constraint(equalTo: button.leadingAnchor),
-            customView.trailingAnchor.constraint(equalTo: button.trailingAnchor),
-            customView.topAnchor.constraint(equalTo: button.topAnchor),
-            customView.bottomAnchor.constraint(equalTo: button.bottomAnchor)
-        ])
-        button.target = self
-        button.action = #selector(togglePanel(_:))
-        button.sendAction(on: [.leftMouseUp])
-    }
-
-    private func bindActions() {
-        contentView.onRefreshIntervalChanged = { [weak self] interval in
-            self?.onRefreshIntervalChanged?(interval)
-        }
-        contentView.onLaunchAtLoginToggled = { [weak self] requestedState in
-            self?.handleLaunchAtLoginRequest(requestedState)
-        }
-        contentView.onQuit = {
-            NSApplication.shared.terminate(nil)
-        }
-        contentView.onPanelHeightChanged = { [weak self] newHeight in
-            self?.updatePanelHeight(newHeight)
-        }
-        contentView.onCheckUpdate = {
-            UpdateChecker.checkForUpdate { result in
-                UpdateChecker.showUpdateAlert(result: result)
-            }
-        }
-        contentView.setLaunchAtLoginEnabled(launchController.isEnabled)
-    }
-
-    private func updatePanelHeight(_ newHeight: CGFloat) {
-        var frame = panel.frame
-        let delta = newHeight - frame.height
-        frame.origin.y -= delta
-        frame.size.height = newHeight
-        panel.setFrame(frame, display: true, animate: true)
-    }
-
-    @objc private func togglePanel(_ sender: NSStatusBarButton) {
-        if panel.isVisible {
-            hidePanel()
+    @objc private func togglePanel(_ sender: Any) {
+        if let session = panelSession {
+            session.close()
             return
         }
-        contentView.setLaunchAtLoginEnabled(launchController.isEnabled)
-        showPanel(relativeTo: sender)
-    }
 
-    private func showPanel(relativeTo button: NSStatusBarButton) {
-        guard let buttonWindow = button.window,
-              let screen = buttonWindow.screen ?? NSScreen.main else { return }
-        let buttonRect = button.convert(button.bounds, to: nil)
-        let screenRect = buttonWindow.convertToScreen(buttonRect)
-
-        // 面板顶部紧贴菜单栏底部，水平居中于状态项。
-        let panelWidth = panel.frame.width
-        let panelHeight = panel.frame.height
-        var x = screenRect.midX - panelWidth / 2
-        let y = screenRect.minY - panelHeight - 4
-
-        // 确保面板不超出屏幕可见区域。
-        let visibleFrame = screen.visibleFrame
-        x = max(visibleFrame.minX + 4, min(x, visibleFrame.maxX - panelWidth - 4))
-
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
-        // 激活应用并设为 key window，使 NSSwitch 等控件渲染蓝色激活态。
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-        addClickMonitors()
-    }
-
-    private func hidePanel() {
-        panel.orderOut(nil)
-        removeClickMonitors()
-    }
-
-    private func addClickMonitors() {
-        // 全局监控：用户点击了应用之外的区域时关闭面板。
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown]
-        ) { [weak self] _ in
-            self?.hidePanel()
-        }
-        // 本地监控：用户在应用窗口中点击了面板和状态项按钮之外的区域。
-        localClickMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown]
-        ) { [weak self] event in
-            guard let self else { return event }
-            if event.window != self.panel,
-               event.window != self.statusItem.button?.window {
-                self.hidePanel()
+        let configuration = PanelSessionConfiguration(
+            anchorButtonProvider: { [weak self] in
+                self?.statusItemHost.anchorButton
+            },
+            refreshInterval: currentRefreshInterval,
+            thresholdConfig: thresholdConfig,
+            launchAtLoginEnabled: launchController.isEnabled,
+            onRefreshIntervalChanged: { [weak self] interval in
+                self?.currentRefreshInterval = interval
+                self?.onRefreshIntervalChanged?(interval)
+            },
+            onThresholdConfigChanged: { [weak self] newConfig in
+                guard let self else { return }
+                self.thresholdConfig = newConfig
+                if let latestSnapshot = self.latestSnapshot {
+                    self.update(snapshot: latestSnapshot)
+                }
+            },
+            onLaunchAtLoginToggled: { [weak self] requestedState in
+                self?.handleLaunchAtLoginRequest(requestedState)
+            },
+            onCheckForUpdates: {
+                UpdateChecker.checkForUpdate { result in
+                    UpdateChecker.showUpdateAlert(result: result)
+                }
+            },
+            onQuit: {
+                NSApplication.shared.terminate(nil)
+            },
+            onClose: { [weak self] in
+                // 为什么：面板关闭回调触发时恢复按钮非高亮状态，并将 session 强引用置空，完成 UI 资源完全释放。
+                self?.statusItemHost.isHighlighted = false
+                self?.panelSession = nil
             }
-            return event
-        }
-        // 应用失去激活状态时（如 Cmd+Tab 切换）关闭面板。
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(applicationDidResignActive),
-            name: NSApplication.didResignActiveNotification,
-            object: nil
         )
-    }
 
-    private func removeClickMonitors() {
-        if let globalClickMonitor {
-            NSEvent.removeMonitor(globalClickMonitor)
-            self.globalClickMonitor = nil
+        let session = panelSessionFactory(configuration)
+        panelSession = session
+        statusItemHost.isHighlighted = true
+        session.show()
+        if let latestSnapshot {
+            session.update(snapshot: latestSnapshot)
         }
-        if let localClickMonitor {
-            NSEvent.removeMonitor(localClickMonitor)
-            self.localClickMonitor = nil
-        }
-        NotificationCenter.default.removeObserver(
-            self,
-            name: NSApplication.didResignActiveNotification,
-            object: nil
-        )
-    }
-
-    @objc private func applicationDidResignActive() {
-        hidePanel()
     }
 }

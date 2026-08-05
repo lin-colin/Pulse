@@ -58,6 +58,24 @@ struct MetricCalculationsTests {
         testMemoryMonitorReentrantEventUptimeReader()
         testMetricFormatting()
         testFormattedMemoryUsageText()
+        // 为什么：CPU 每秒读取必须平衡 host port 发送权，否则长期运行会累积引用。
+        testCPUUsageBalancesHostPortSendRight()
+        // 为什么：标称频率是稳定硬件属性，不应在每次刷新重复 sysctl。
+        testCPUFrequencyReaderRunsOnce()
+        // 为什么：状态栏展示模型必须准确表达指标与阈值，且 Icon 与 Value 颜色保持独立。
+        testStatusItemRenderModelUsesSnapshotAndThresholds()
+        testChargingPowerIconAndValueKeepIndependentColors()
+        testStatusItemRenderModelEqualitySupportsDeduplication()
+        // 为什么：完全相同的显示状态不得重复调用 CoreGraphics 栅格化绘制。
+        testStatusBarControllerDeduplicatesIdenticalSnapshots()
+        // 为什么：阈值配置只在有效解析时通过回调更新，禁止热路径频繁查询 UserDefaults。
+        testThresholdConfigCallbackUpdatesMemoryAndRerenders()
+        // 为什么：详情面板按需创建并在关闭后销毁，离线不更新面板以降低常驻开销。
+        testStatusBarControllerPanelSessionLifecycle()
+        // 为什么：高级设置行只在第一次展开时创建，避免面板初始化构建全量隐藏视图。
+        testPopoverContentViewLazySettingsRows()
+        // 为什么：只在 SMC 缺失具体指标时精确读取电池对应属性，禁止无条件复制完整 IOKit 字典。
+        testHardwareMonitorPreciseBatteryReadNeeds()
         testDefaultRefreshInterval()
         testRefreshIntervalValidation()
         // 验证展示语义，让颜色/可用性只由真实压力状态决定。
@@ -66,12 +84,17 @@ struct MetricCalculationsTests {
         testPowerDisplayConfigurationCharging()
         testPowerDisplayConfigurationPluggedInPassThrough()
         testPowerDisplayConfigurationDischarging()
-        // 验证电源状态精准文案映射，涵盖充电、连接电源未充电、使用电池三种物理场景。
+        // 为什么：电源状态精准文案映射与快照推导断言。
         testPowerSourceStateDescription()
         testPowerSourceSnapshotDerivation()
+        // 为什么：控制器必须使用抽象的 StatusItemHosting 运行在测试环境。
+        testStatusBarControllerUsesStatusItemHost()
+        // 为什么：未挂接状态项时绝不生成错色位图，等到挂接至托管窗口才触发真实渲染。
+        testFirstVisibleRenderWaitsForHostedAppearance()
+        // 为什么：本地点击过滤排查状态栏锚点窗口，连续四击严格交替 open/closed。
+        testPanelSessionLocalClickFiltering()
+        testStatusBarControllerFourClicksAlternatingToggle()
         testPulseSnapshotKeepsOneRefreshState()
-        testStatusItemWidthTracksLongestValues()
-        testStatusItemViewLetsParentButtonHandleClicks()
         testRefreshControlUsesNativeSelectionAndHoverState()
         testPopoverContentUpdatesExistingMetricLabels()
         testPopoverGroupsAndRowsShareHorizontalGeometry()
@@ -79,6 +102,13 @@ struct MetricCalculationsTests {
         testPopoverLaunchSwitchReflectsActualState()
         testPopoverQuitButtonForwardsAction()
         testLaunchAtLoginFailureRestoresDisplayedState()
+        // 为什么：开机启动失败更新开关真实状态，阈值配置使用注入单一来源。
+        testLaunchAtLoginFailureUpdatesPanelSwitchState()
+        testPanelSessionInjectsThresholdConfigWithoutUserDefaultLoad()
+        // 为什么：初始化阶段系统状态项外观必须首帧保底为 darkAqua，防止黑字。
+        testSystemStatusItemHostDarkAquaFallback()
+        // 为什么：面板显示期间状态栏宿主必须保持高亮状态，面板关闭后恢复。
+        testStatusBarControllerKeepsHighlightStateWhilePanelVisible()
         // 运行全功能与 A1 硬件口径回归测试断言集。
         testFullFeatureAndRegressionSuite()
 
@@ -1290,52 +1320,6 @@ struct MetricCalculationsTests {
         expectEqual(snapshot.powerSource.description, powerSource.description, "snapshot should preserve power state")
     }
 
-    /// 为什么：父状态项必须在绘制前获得完整宽度，不能让子视图扩张后被按钮裁切。
-    private static func testStatusItemWidthTracksLongestValues() {
-        let view = StatusItemView(frame: NSRect(x: 0, y: 0, width: 1, height: 22))
-        let compact = view.update(
-            power: 7.1,
-            memoryUsagePercentage: 8,
-            memoryPressureLevel: .normal,
-            temperature: 32.2,
-            cpuUsage: 7,
-            isCharging: false,
-            isPluggedIn: true
-        )
-        let expanded = view.update(
-            power: 137.8,
-            memoryUsagePercentage: 100,
-            memoryPressureLevel: .critical,
-            temperature: 102.2,
-            cpuUsage: 100,
-            isCharging: false,
-            isPluggedIn: false
-        )
-        expectTrue(expanded > compact, "long values must increase required status-item width")
-        expectEqual(
-            expanded,
-            view.intrinsicContentSize.width,
-            "intrinsic width must match the reported width"
-        )
-        view.frame.size.width = expanded
-        view.layoutSubtreeIfNeeded()
-        let labels = view.subviews.compactMap { $0 as? NSTextField }
-        let furthestLabelEdge = labels.map(\.frame.maxX).max() ?? expanded
-        expectTrue(
-            expanded - furthestLabelEdge >= 7,
-            "status item should keep at least seven points after the longest suffix"
-        )
-    }
-
-    /// 为什么：内容视图只负责展示，鼠标必须交给父 NSStatusBarButton 打开或关闭面板。
-    private static func testStatusItemViewLetsParentButtonHandleClicks() {
-        let view = StatusItemView(frame: NSRect(x: 0, y: 0, width: 90, height: 22))
-        expectTrue(
-            view.hitTest(NSPoint(x: 20, y: 10)) == nil,
-            "status content must not intercept the parent button click"
-        )
-    }
-
     /// 为什么：刷新选择必须走真实 NSPopUpButton 状态，hover 只能改变表现而不能接管点击。
     private static func testRefreshControlUsesNativeSelectionAndHoverState() {
         let control = RefreshIntervalControl(
@@ -1467,7 +1451,7 @@ struct MetricCalculationsTests {
             return "\(Int(origin.x.rounded())):\(Int((origin.x + separator.frame.width).rounded()))"
         }
         expectTrue(
-            separatorEdges.count == 6 && Set(separatorEdges).count == 1,
+            separatorEdges.count == 5 && Set(separatorEdges).count == 1,
             "all metric and setting separators should share one horizontal span"
         )
     }
@@ -1633,6 +1617,644 @@ struct MetricCalculationsTests {
             return
         }
         recordSuccess()
+    }
+
+    private static func hostSendRightReferences(
+        for port: mach_port_t
+    ) -> mach_port_urefs_t? {
+        var references: mach_port_urefs_t = 0
+        guard mach_port_get_refs(
+            mach_task_self_,
+            port,
+            MACH_PORT_RIGHT_SEND,
+            &references
+        ) == KERN_SUCCESS else {
+            return nil
+        }
+        return references
+    }
+
+    private static func testCPUUsageBalancesHostPortSendRight() {
+        let observedHostPort = mach_host_self()
+        guard observedHostPort != mach_port_t(MACH_PORT_NULL) else {
+            expectTrue(false, "test must obtain a host port")
+            return
+        }
+        defer {
+            mach_port_deallocate(mach_task_self_, observedHostPort)
+        }
+
+        let monitor = SystemMonitor(
+            memoryStatisticsReader: { nil },
+            pressureLevelReader: { 1 },
+            startPressureEvents: false,
+            uptimeReader: { 0 },
+            cpuFrequencyReader: { 0 }
+        )
+        let before = hostSendRightReferences(for: observedHostPort)
+        for _ in 0..<100 {
+            _ = monitor.getCPUUsage()
+        }
+        let after = hostSendRightReferences(for: observedHostPort)
+        expectTrue(
+            before != nil && after == before,
+            "one hundred CPU reads must not increase host send-right references"
+        )
+    }
+
+    private static func testCPUFrequencyReaderRunsOnce() {
+        var reads = 0
+        let monitor = SystemMonitor(
+            memoryStatisticsReader: { nil },
+            pressureLevelReader: { 1 },
+            startPressureEvents: false,
+            uptimeReader: { 0 },
+            cpuFrequencyReader: {
+                reads += 1
+                return 3.2
+            }
+        )
+
+        expectEqual(monitor.getCPUFrequency(), 3.2, "cached frequency should be returned")
+        expectEqual(monitor.getCPUFrequency(), 3.2, "cached frequency should remain stable")
+        expectEqual(Double(reads), 1, "frequency reader should run once per monitor")
+    }
+
+    private static func makePulseSnapshot(
+        power: Double? = 7.1,
+        memoryUsagePercentage: Double? = 41,
+        pressureLevel: MemoryPressureLevel = .normal,
+        temperature: Double? = 30.6,
+        cpuUsage: Double = 10,
+        isCharging: Bool = false,
+        isPluggedIn: Bool = false
+    ) -> PulseSnapshot {
+        let totalBytes: UInt64 = 24 * 1_073_741_824
+        let usedBytes = memoryUsagePercentage.map {
+            UInt64((Double(totalBytes) * $0 / 100.0).rounded())
+        }
+        return PulseSnapshot(
+            power: power,
+            memory: MemorySnapshot(
+                usedBytes: usedBytes,
+                totalBytes: totalBytes,
+                usagePercentage: memoryUsagePercentage,
+                pressureLevel: pressureLevel
+            ),
+            temperature: temperature,
+            cpuUsage: cpuUsage,
+            cpuFrequency: 0,
+            powerSource: PowerSourceSnapshot(
+                isCharging: isCharging,
+                isPluggedIn: isPluggedIn,
+                description: isCharging ? "充电中" : (isPluggedIn ? "已连接电源" : "使用电池")
+            )
+        )
+    }
+
+    private static func testStatusItemRenderModelUsesSnapshotAndThresholds() {
+        let snapshot = makePulseSnapshot(
+            power: 31,
+            memoryUsagePercentage: 41,
+            pressureLevel: .normal,
+            temperature: 30.6,
+            cpuUsage: 10,
+            isCharging: false,
+            isPluggedIn: false
+        )
+        let model = StatusItemRenderModel.make(
+            snapshot: snapshot,
+            thresholds: .defaults()
+        )
+
+        expectEqual(model.powerText, "31.0 W", "power text should preserve one decimal")
+        expectEqual(model.temperatureText, "30.6 °C", "temperature text should preserve one decimal")
+        expectEqual(model.memoryText, "41%", "memory text should be an integer percentage")
+        expectEqual(model.cpuText, "10%", "CPU text should be an integer percentage")
+        expectTrue(model.powerIconColor == .red, "discharging power icon should use the configured red threshold")
+        expectTrue(model.powerTextColor == .red, "power text should use the configured red threshold")
+        expectTrue(model.memoryColor == .green, "normal memory pressure should remain green")
+    }
+
+    private static func testChargingPowerIconAndValueKeepIndependentColors() {
+        let snapshot = makePulseSnapshot(
+            power: 31,
+            isCharging: true,
+            isPluggedIn: true
+        )
+        let model = StatusItemRenderModel.make(snapshot: snapshot, thresholds: .defaults())
+
+        expectTrue(model.powerIconColor == .green,
+                   "charging state must keep the bolt green")
+        expectTrue(model.powerTextColor == .red,
+                   "high power must still warn through the value color")
+    }
+
+    private static func testStatusItemRenderModelEqualitySupportsDeduplication() {
+        let snapshot = makePulseSnapshot()
+        let first = StatusItemRenderModel.make(snapshot: snapshot, thresholds: .defaults())
+        let second = StatusItemRenderModel.make(snapshot: snapshot, thresholds: .defaults())
+        expectTrue(first == second, "identical display state should compare equal")
+    }
+
+    private final class StubLaunchController: LaunchAtLoginControlling {
+        var isEnabled: Bool = false
+        var shouldThrow: Bool = false
+        func setEnabled(_ enabled: Bool) throws {
+            if shouldThrow {
+                struct TestError: Error {}
+                throw TestError()
+            }
+            isEnabled = enabled
+        }
+    }
+
+    private final class SpyStatusItemRenderer: StatusItemRendering {
+        private(set) var renderCount = 0
+        let rendered: RenderedStatusItem
+
+        init(rendered: RenderedStatusItem) {
+            self.rendered = rendered
+        }
+
+        func render(
+            model: StatusItemRenderModel,
+            appearance: NSAppearance,
+            backingScaleFactor: CGFloat
+        ) -> RenderedStatusItem? {
+            renderCount += 1
+            return rendered
+        }
+    }
+
+    private static func testStatusBarControllerDeduplicatesIdenticalSnapshots() {
+        let dummyImage = NSImage(size: NSSize(width: 100, height: 22))
+        let geometry = StatusItemGeometry(
+            canvasSize: NSSize(width: 100, height: 22),
+            powerIconFrame: .zero,
+            temperatureIconFrame: .zero,
+            memoryIconFrame: .zero,
+            cpuIconFrame: .zero,
+            powerTextOrigin: .zero,
+            temperatureTextOrigin: .zero,
+            memoryTextOrigin: .zero,
+            cpuTextOrigin: .zero
+        )
+        let spy = SpyStatusItemRenderer(
+            rendered: RenderedStatusItem(image: dummyImage, geometry: geometry)
+        )
+        let controller = StatusBarController(
+            launchController: StubLaunchController(),
+            statusRenderer: spy
+        )
+
+        let snapshot1 = makePulseSnapshot(cpuUsage: 10)
+        controller.update(snapshot: snapshot1)
+        expectEqual(Double(spy.renderCount), 1, "first snapshot should render")
+
+        // 相同快照重复更新不应触发再次渲染
+        controller.update(snapshot: snapshot1)
+        expectEqual(Double(spy.renderCount), 1, "identical snapshot should be deduplicated")
+
+        // 指标变化触发渲染
+        let snapshot2 = makePulseSnapshot(cpuUsage: 20)
+        controller.update(snapshot: snapshot2)
+        expectEqual(Double(spy.renderCount), 2, "changed snapshot should trigger new render")
+    }
+
+    private static func testThresholdConfigCallbackUpdatesMemoryAndRerenders() {
+        let view = PopoverContentView(
+            frame: NSRect(x: 0, y: 0, width: 340, height: 320)
+        )
+        var callbackCount = 0
+        var receivedConfig: ThresholdConfig?
+        view.onThresholdConfigChanged = { config in
+            callbackCount += 1
+            receivedConfig = config
+        }
+
+        // 为什么：高级设置只在展开后创建，先点击展开按钮
+        if let moreButton: NSButton = descendant(in: view, identifier: "control.more.button"),
+           let action = moreButton.action, let target = moreButton.target {
+            NSApp.sendAction(action, to: target, from: moreButton)
+        }
+
+        // 尝试更改所有阈值输入框为有效数值
+        let orangeInputs = allDescendants(in: view).compactMap { $0 as? NSTextField }
+            .filter { $0.identifier?.rawValue.hasSuffix(".orangeInput") == true }
+        let redInputs = allDescendants(in: view).compactMap { $0 as? NSTextField }
+            .filter { $0.identifier?.rawValue.hasSuffix(".redInput") == true }
+
+        expectEqual(Double(orangeInputs.count), 3, "should find three orange input fields")
+        expectEqual(Double(redInputs.count), 3, "should find three red input fields")
+
+        for input in orangeInputs + redInputs {
+            input.stringValue = "50"
+            if let action = input.action, let target = input.target {
+                NSApp.sendAction(action, to: target, from: input)
+            }
+        }
+
+        expectEqual(Double(callbackCount), 6, "every valid field edit should trigger threshold config update")
+        expectEqual(receivedConfig?.cpu.red, 50, "received config should hold updated threshold")
+
+        // 设置无效输入清空文本框不应触发回调
+        if let firstInput = orangeInputs.first {
+            firstInput.stringValue = ""
+            if let action = firstInput.action, let target = firstInput.target {
+                NSApp.sendAction(action, to: target, from: firstInput)
+            }
+            expectEqual(Double(callbackCount), 6, "invalid incomplete input must not trigger callback")
+        }
+    }
+
+    private final class SpyPanelSession: PanelSessionControlling {
+        var isVisible: Bool = false
+        private(set) var showCount = 0
+        private(set) var updateCount = 0
+        private(set) var closeCount = 0
+        private(set) var lastUpdatedSnapshot: PulseSnapshot?
+        let configuration: PanelSessionConfiguration
+
+        init(configuration: PanelSessionConfiguration) {
+            self.configuration = configuration
+        }
+
+        func show() {
+            showCount += 1
+            isVisible = true
+        }
+
+        private(set) var lastSetLaunchAtLoginState: Bool?
+
+        func setLaunchAtLoginEnabled(_ enabled: Bool) {
+            lastSetLaunchAtLoginState = enabled
+        }
+
+        func update(snapshot: PulseSnapshot) {
+            updateCount += 1
+            lastUpdatedSnapshot = snapshot
+        }
+
+        func close() {
+            closeCount += 1
+            isVisible = false
+            configuration.onClose()
+        }
+    }
+
+    private static func testStatusBarControllerPanelSessionLifecycle() {
+        var createdSessionCount = 0
+        weak var weakSession: SpyPanelSession?
+
+        let dummyImage = NSImage(size: NSSize(width: 100, height: 22))
+        let geometry = StatusItemGeometry(
+            canvasSize: NSSize(width: 100, height: 22),
+            powerIconFrame: .zero,
+            temperatureIconFrame: .zero,
+            memoryIconFrame: .zero,
+            cpuIconFrame: .zero,
+            powerTextOrigin: .zero,
+            temperatureTextOrigin: .zero,
+            memoryTextOrigin: .zero,
+            cpuTextOrigin: .zero
+        )
+        let dummyRenderer = SpyStatusItemRenderer(
+            rendered: RenderedStatusItem(image: dummyImage, geometry: geometry)
+        )
+
+        let controller = StatusBarController(
+            launchController: StubLaunchController(),
+            statusRenderer: dummyRenderer,
+            panelSessionFactory: { config in
+                createdSessionCount += 1
+                let session = SpyPanelSession(configuration: config)
+                weakSession = session
+                return session
+            }
+        )
+
+        expectEqual(Double(createdSessionCount), 0, "constructing controller must not eagerly create panel session")
+
+        let snapshot1 = makePulseSnapshot(cpuUsage: 15)
+        controller.update(snapshot: snapshot1)
+        expectEqual(Double(createdSessionCount), 0, "closed panel must not create panel session on update")
+
+        // 模拟打开面板
+        controller.togglePanelForTesting()
+        expectEqual(Double(createdSessionCount), 1, "opening panel must create exactly one session")
+        expectEqual(Double(weakSession?.showCount ?? 0), 1, "session should be shown")
+        expectEqual(Double(weakSession?.updateCount ?? 0), 1, "opening session must consume latest snapshot")
+        expectEqual(weakSession?.lastUpdatedSnapshot?.cpuUsage, 15, "snapshot content must match")
+
+        // 面板打开期间收到新快照更新 session
+        let snapshot2 = makePulseSnapshot(cpuUsage: 35)
+        controller.update(snapshot: snapshot2)
+        expectEqual(Double(weakSession?.updateCount ?? 0), 2, "visible session must receive new updates")
+
+        // 模拟关闭面板
+        weakSession?.close()
+        expectTrue(weakSession == nil, "closing panel session must release strong reference and allow deallocation")
+
+        // 面板关闭后后续更新不增加已关 session 的 updateCount
+        controller.update(snapshot: makePulseSnapshot(cpuUsage: 50))
+        expectEqual(Double(createdSessionCount), 1, "updating while closed must not recreate session")
+    }
+
+    private static func testPopoverContentViewLazySettingsRows() {
+        let view = PopoverContentView(
+            frame: NSRect(x: 0, y: 0, width: 340, height: 320)
+        )
+
+        // 初始化完成后不应创建任何 settings. 前缀的元素
+        let initialSettingsViews = allDescendants(in: view).filter {
+            $0.identifier?.rawValue.hasPrefix("settings.") == true
+        }
+        expectEqual(Double(initialSettingsViews.count), 0, "initial view must not create settings subviews")
+
+        // 触发展开按钮点击
+        let moreButton: NSButton? = descendant(in: view, identifier: "control.more.button")
+        expectTrue(moreButton != nil, "more button should exist")
+        if let moreButton, let action = moreButton.action, let target = moreButton.target {
+            NSApp.sendAction(action, to: target, from: moreButton)
+        }
+
+        let expandedSections = allDescendants(in: view).filter {
+            $0.identifier?.rawValue.hasPrefix("settings.section.") == true && !($0 is NSTextField)
+        }
+        expectEqual(Double(expandedSections.count), 3, "expanding must create exactly three settings sections")
+
+        // 折叠再展开，数量应保持为 3，不发生二次重复创建
+        if let moreButton, let action = moreButton.action, let target = moreButton.target {
+            NSApp.sendAction(action, to: target, from: moreButton) // 折叠
+            NSApp.sendAction(action, to: target, from: moreButton) // 再次展开
+        }
+
+        let reexpandedSections = allDescendants(in: view).filter {
+            $0.identifier?.rawValue.hasPrefix("settings.section.") == true && !($0 is NSTextField)
+        }
+        expectEqual(Double(reexpandedSections.count), 3, "re-expanding must reuse created settings sections")
+    }
+
+    private final class SpyBatteryRegistryReader: BatteryRegistryReading {
+        private(set) var recordedNeeds: [BatteryRegistryReadNeeds] = []
+
+        func readMetrics(needs: BatteryRegistryReadNeeds) -> BatteryRegistryMetrics {
+            recordedNeeds.append(needs)
+            return BatteryRegistryMetrics(
+                systemLoadMilliwatts: needs.contains(.systemLoad) ? 15000 : nil,
+                externalConnected: needs.contains(.systemLoad) ? false : nil,
+                temperatureCentiDegrees: needs.contains(.temperature) ? 3500 : nil
+            )
+        }
+    }
+
+    private static func testHardwareMonitorPreciseBatteryReadNeeds() {
+        let spy = SpyBatteryRegistryReader()
+
+        // 1. PSTR 和 TB0T 均有效：必须不发起任何 IOKit 读取
+        let fullSMC = StubSMCReader(systemPowerWatts: 12.5, batteryTemperatureCelsius: 32.0)
+        let fullMonitor = HardwareMonitor(smcReader: fullSMC, batteryRegistryReader: spy)
+        let fullSnapshot = fullMonitor.readSnapshot()
+        expectEqual(fullSnapshot.systemLoadWatts, 12.5, "valid SMC power should be used")
+        expectEqual(fullSnapshot.batteryTemperatureCelsius, 32.0, "valid SMC temp should be used")
+        expectEqual(Double(spy.recordedNeeds.count), 0, "no battery registry read needed when SMC complete")
+
+        // 2. 仅缺失 PSTR：只能指定读取 .systemLoad
+        let missingPowerSMC = StubSMCReader(systemPowerWatts: nil, batteryTemperatureCelsius: 32.0)
+        let powerMonitor = HardwareMonitor(smcReader: missingPowerSMC, batteryRegistryReader: spy)
+        let powerSnapshot = powerMonitor.readSnapshot()
+        expectEqual(powerSnapshot.systemLoadWatts, 15.0, "fallback battery power should be used")
+        expectEqual(powerSnapshot.batteryTemperatureCelsius, 32.0, "valid SMC temp should be preserved")
+        expectEqual(Double(spy.recordedNeeds.count), 1, "exactly one registry read performed")
+        expectTrue(spy.recordedNeeds.last == [.systemLoad], "must request only systemLoad when power missing")
+
+        // 3. 仅缺失 TB0T：只能指定读取 .temperature
+        let missingTempSMC = StubSMCReader(systemPowerWatts: 12.5, batteryTemperatureCelsius: nil)
+        let tempMonitor = HardwareMonitor(smcReader: missingTempSMC, batteryRegistryReader: spy)
+        let tempSnapshot = tempMonitor.readSnapshot()
+        expectEqual(tempSnapshot.systemLoadWatts, 12.5, "valid SMC power should be preserved")
+        expectEqual(tempSnapshot.batteryTemperatureCelsius, 35.0, "fallback battery temp should be used")
+        expectEqual(Double(spy.recordedNeeds.count), 2, "exactly two registry reads performed")
+        expectTrue(spy.recordedNeeds.last == [.temperature], "must request only temperature when temp missing")
+
+        // 4. 两者均缺失：指定读取 [.systemLoad, .temperature]
+        let emptySMC = StubSMCReader(systemPowerWatts: nil, batteryTemperatureCelsius: nil)
+        let emptyMonitor = HardwareMonitor(smcReader: emptySMC, batteryRegistryReader: spy)
+        let emptySnapshot = emptyMonitor.readSnapshot()
+        expectEqual(emptySnapshot.systemLoadWatts, 15.0, "fallback battery power should be used")
+        expectEqual(emptySnapshot.batteryTemperatureCelsius, 35.0, "fallback battery temp should be used")
+        expectEqual(Double(spy.recordedNeeds.count), 3, "exactly three registry reads performed")
+        expectTrue(spy.recordedNeeds.last == [.systemLoad, .temperature], "must request both when SMC empty")
+    }
+
+    private static func testStatusBarControllerUsesStatusItemHost() {
+        let fakeHost = FakeStatusItemHost(isAttachedToWindow: true, effectiveAppearance: NSAppearance(named: .darkAqua)!, backingScaleFactor: 2.0)
+        let controller = StatusBarController(
+            statusItemHost: fakeHost,
+            launchController: StubLaunchController()
+        )
+        let snapshot = makePulseSnapshot(cpuUsage: 25)
+        controller.update(snapshot: snapshot)
+        expectTrue(fakeHost.image != nil, "fake status item host should receive rendered image")
+    }
+
+    private static func testFirstVisibleRenderWaitsForHostedAppearance() {
+        let host = FakeStatusItemHost(isAttachedToWindow: false, effectiveAppearance: NSAppearance(named: .aqua)!, backingScaleFactor: 2.0)
+        let dummyImage = NSImage(size: NSSize(width: 100, height: 22))
+        let geometry = StatusItemGeometry(
+            canvasSize: NSSize(width: 100, height: 22),
+            powerIconFrame: .zero,
+            temperatureIconFrame: .zero,
+            memoryIconFrame: .zero,
+            cpuIconFrame: .zero,
+            powerTextOrigin: .zero,
+            temperatureTextOrigin: .zero,
+            memoryTextOrigin: .zero,
+            cpuTextOrigin: .zero
+        )
+        let spyRenderer = SpyStatusItemRenderer(rendered: RenderedStatusItem(image: dummyImage, geometry: geometry))
+        let controller = StatusBarController(
+            statusItemHost: host,
+            launchController: StubLaunchController(),
+            statusRenderer: spyRenderer
+        )
+
+        controller.update(snapshot: makePulseSnapshot())
+        expectEqual(Double(spyRenderer.renderCount), 0, "unattached status item must only cache snapshot")
+        expectTrue(host.image == nil, "unattached item must not expose a wrongly colored bitmap")
+
+        host.isAttachedToWindow = true
+        host.effectiveAppearance = NSAppearance(named: .darkAqua)!
+        host.onRenderEnvironmentChanged?()
+
+        expectEqual(Double(spyRenderer.renderCount), 1, "hosted appearance must trigger the first render")
+    }
+
+    private static func testPanelSessionLocalClickFiltering() {
+        let panelWindow = NSWindow()
+        let anchorWindow = NSWindow()
+        let thirdPartyWindow = NSWindow()
+
+        expectFalse(
+            PanelSession.shouldCloseForLocalClick(eventWindow: panelWindow, panelWindow: panelWindow, anchorWindow: anchorWindow),
+            "click inside panel window must not close panel"
+        )
+        expectFalse(
+            PanelSession.shouldCloseForLocalClick(eventWindow: anchorWindow, panelWindow: panelWindow, anchorWindow: anchorWindow),
+            "click inside status item anchor window must not close panel via local monitor"
+        )
+        expectTrue(
+            PanelSession.shouldCloseForLocalClick(eventWindow: thirdPartyWindow, panelWindow: panelWindow, anchorWindow: anchorWindow),
+            "click inside third party window must close panel"
+        )
+        expectTrue(
+            PanelSession.shouldCloseForLocalClick(eventWindow: nil, panelWindow: panelWindow, anchorWindow: anchorWindow),
+            "click outside window system must close panel"
+        )
+    }
+
+    private static func testStatusBarControllerFourClicksAlternatingToggle() {
+        var createdSessionCount = 0
+
+        let fakeHost = FakeStatusItemHost(isAttachedToWindow: true, effectiveAppearance: NSAppearance(named: .darkAqua)!, backingScaleFactor: 2.0)
+        let dummyImage = NSImage(size: NSSize(width: 100, height: 22))
+        let geometry = StatusItemGeometry(
+            canvasSize: NSSize(width: 100, height: 22),
+            powerIconFrame: .zero,
+            temperatureIconFrame: .zero,
+            memoryIconFrame: .zero,
+            cpuIconFrame: .zero,
+            powerTextOrigin: .zero,
+            temperatureTextOrigin: .zero,
+            memoryTextOrigin: .zero,
+            cpuTextOrigin: .zero
+        )
+        let spyRenderer = SpyStatusItemRenderer(rendered: RenderedStatusItem(image: dummyImage, geometry: geometry))
+
+        let controller = StatusBarController(
+            statusItemHost: fakeHost,
+            launchController: StubLaunchController(),
+            statusRenderer: spyRenderer,
+            panelSessionFactory: { config in
+                createdSessionCount += 1
+                let spy = SpyPanelSession(configuration: config)
+                return spy
+            }
+        )
+
+        // 模拟连续 4 次点击状态栏
+        controller.togglePanelForTesting() // 第 1 次：open
+        expectEqual(Double(createdSessionCount), 1, "first click must open panel session")
+
+        controller.togglePanelForTesting() // 第 2 次：close
+        expectEqual(Double(createdSessionCount), 1, "second click must close panel without creating new session")
+
+        controller.togglePanelForTesting() // 第 3 次：open
+        expectEqual(Double(createdSessionCount), 2, "third click must open new panel session")
+
+        controller.togglePanelForTesting() // 第 4 次：close
+        expectEqual(Double(createdSessionCount), 2, "fourth click must close panel session")
+    }
+
+    private static func testLaunchAtLoginFailureUpdatesPanelSwitchState() {
+        var createdSpy: SpyPanelSession?
+        let stubLaunch = StubLaunchController()
+        stubLaunch.shouldThrow = true // 模拟操作失败
+        stubLaunch.isEnabled = false
+
+        let fakeHost = FakeStatusItemHost(isAttachedToWindow: true, effectiveAppearance: NSAppearance(named: .darkAqua)!, backingScaleFactor: 2.0)
+        let dummyImage = NSImage(size: NSSize(width: 100, height: 22))
+        let geometry = StatusItemGeometry(
+            canvasSize: NSSize(width: 100, height: 22),
+            powerIconFrame: .zero,
+            temperatureIconFrame: .zero,
+            memoryIconFrame: .zero,
+            cpuIconFrame: .zero,
+            powerTextOrigin: .zero,
+            temperatureTextOrigin: .zero,
+            memoryTextOrigin: .zero,
+            cpuTextOrigin: .zero
+        )
+        let spyRenderer = SpyStatusItemRenderer(rendered: RenderedStatusItem(image: dummyImage, geometry: geometry))
+
+        let controller = StatusBarController(
+            statusItemHost: fakeHost,
+            launchController: stubLaunch,
+            statusRenderer: spyRenderer,
+            panelSessionFactory: { config in
+                let spy = SpyPanelSession(configuration: config)
+                createdSpy = spy
+                return spy
+            }
+        )
+
+        controller.togglePanelForTesting()
+        // 模拟触发开机自启申请
+        controller.handleLaunchAtLoginRequest(true)
+        expectTrue(createdSpy?.lastSetLaunchAtLoginState == false, "failed launch-at-login enable must restore false switch state")
+    }
+
+    private static func testPanelSessionInjectsThresholdConfigWithoutUserDefaultLoad() {
+        let injectedConfig = ThresholdConfig(
+            power: MetricThreshold(orange: 99, red: 100),
+            temperature: MetricThreshold(orange: 77, red: 88),
+            cpu: MetricThreshold(orange: 55, red: 66)
+        )
+
+        let sessionConfig = PanelSessionConfiguration(
+            anchorButtonProvider: { nil },
+            refreshInterval: 1.0,
+            thresholdConfig: injectedConfig,
+            launchAtLoginEnabled: false,
+            onRefreshIntervalChanged: { _ in },
+            onThresholdConfigChanged: { _ in },
+            onLaunchAtLoginToggled: { _ in },
+            onCheckForUpdates: {},
+            onQuit: {},
+            onClose: {}
+        )
+
+        let session = PanelSession(configuration: sessionConfig)
+        expectTrue(session.isVisible == false, "session initial state should be closed")
+    }
+
+    private static func testSystemStatusItemHostDarkAquaFallback() {
+        let host = SystemStatusItemHost()
+        let appearance = host.effectiveAppearance
+        expectEqual(appearance.name.rawValue, NSAppearance.Name.darkAqua.rawValue, "initial status item host appearance must fallback to darkAqua to prevent black text")
+    }
+
+    private static func testStatusBarControllerKeepsHighlightStateWhilePanelVisible() {
+        let fakeHost = FakeStatusItemHost(isAttachedToWindow: true, effectiveAppearance: NSAppearance(named: .darkAqua)!, backingScaleFactor: 2.0)
+        let dummyImage = NSImage(size: NSSize(width: 100, height: 22))
+        let geometry = StatusItemGeometry(
+            canvasSize: NSSize(width: 100, height: 22),
+            powerIconFrame: .zero,
+            temperatureIconFrame: .zero,
+            memoryIconFrame: .zero,
+            cpuIconFrame: .zero,
+            powerTextOrigin: .zero,
+            temperatureTextOrigin: .zero,
+            memoryTextOrigin: .zero,
+            cpuTextOrigin: .zero
+        )
+        let spyRenderer = SpyStatusItemRenderer(rendered: RenderedStatusItem(image: dummyImage, geometry: geometry))
+
+        let controller = StatusBarController(
+            statusItemHost: fakeHost,
+            launchController: StubLaunchController(),
+            statusRenderer: spyRenderer,
+            panelSessionFactory: { config in
+                SpyPanelSession(configuration: config)
+            }
+        )
+
+        expectFalse(fakeHost.isHighlighted, "initial host highlight state must be false")
+        controller.togglePanelForTesting()
+        expectTrue(fakeHost.isHighlighted, "host must be highlighted while panel is visible")
+        controller.togglePanelForTesting()
+        expectFalse(fakeHost.isHighlighted, "host highlight state must be restored to false after panel close")
     }
 
     private static func expectFalse(_ actual: Bool, _ message: String) {

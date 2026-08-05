@@ -17,13 +17,15 @@ enum PulseDefaults {
 // MARK: - 可配置阈值
 
 /// 单个指标的橙色警告与红色高危阈值。
-struct MetricThreshold {
+/// 为什么：遵从 Equatable 允许在上层通过深度相等判定配置变化，避免无变化时的重绘。
+struct MetricThreshold: Equatable {
     var orange: Double
     var red: Double
 }
 
 /// 集中管理所有指标的可配置阈值，提供 UserDefaults 持久化。
-struct ThresholdConfig {
+/// 为什么：遵从 Equatable 允许在 StatusBarController 和 PopoverContentView 之间高效比较，避免重复从 UserDefaults 加载。
+struct ThresholdConfig: Equatable {
 
     var power: MetricThreshold
     var temperature: MetricThreshold

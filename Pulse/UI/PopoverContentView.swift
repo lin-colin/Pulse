@@ -44,14 +44,18 @@ final class PopoverContentView: NSView {
     private var settingsExpanded = false
     private let moreChevron = NSImageView()
     private var thresholdInputs: [(orange: NSTextField, red: NSTextField)] = []
-    private var thresholdConfig = ThresholdConfig.load()
+    private var thresholdConfig: ThresholdConfig
 
-    override init(frame frameRect: NSRect) {
+    var onThresholdConfigChanged: ((ThresholdConfig) -> Void)?
+
+    init(frame frameRect: NSRect = .zero, thresholdConfig: ThresholdConfig = .load()) {
+        self.thresholdConfig = thresholdConfig
         super.init(frame: frameRect)
         configureView()
     }
 
     required init?(coder: NSCoder) {
+        self.thresholdConfig = .load()
         super.init(coder: coder)
         configureView()
     }
@@ -131,7 +135,6 @@ final class PopoverContentView: NSView {
         quitGroup.identifier = NSUserInterfaceItemIdentifier("group.quit")
         buildMetricRows()
         buildControlRows()
-        buildSettingsRows()
         configureQuitButton()
 
         addSubview(metricsGroup)
@@ -397,7 +400,19 @@ final class PopoverContentView: NSView {
         onQuit?()
     }
 
+    private var settingsRowsBuilt = false
+
+    private func ensureSettingsRowsBuilt() {
+        guard !settingsRowsBuilt else { return }
+        // 为什么：高级设置只在用户明确展开时创建，避免隐藏视图占用冷启动内存。
+        buildSettingsRows()
+        settingsRowsBuilt = true
+    }
+
     @objc private func toggleSettings(_ sender: Any) {
+        if !settingsExpanded {
+            ensureSettingsRowsBuilt()
+        }
         settingsExpanded.toggle()
         let symbolName = settingsExpanded ? "chevron.up" : "chevron.down"
         moreChevron.image = NSImage(
@@ -413,16 +428,34 @@ final class PopoverContentView: NSView {
     }
 
     @objc private func thresholdValueChanged(_ sender: NSTextField) {
-        // 从输入框读取所有阈值并保存
-        if thresholdInputs.count >= 3 {
-            thresholdConfig.power.orange = Double(thresholdInputs[0].orange.stringValue) ?? 18
-            thresholdConfig.power.red = Double(thresholdInputs[0].red.stringValue) ?? 30
-            thresholdConfig.temperature.orange = Double(thresholdInputs[1].orange.stringValue) ?? 35
-            thresholdConfig.temperature.red = Double(thresholdInputs[1].red.stringValue) ?? 40
-            thresholdConfig.cpu.orange = Double(thresholdInputs[2].orange.stringValue) ?? 60
-            thresholdConfig.cpu.red = Double(thresholdInputs[2].red.stringValue) ?? 80
-            thresholdConfig.save()
+        guard thresholdInputs.count >= 3 else { return }
+
+        let powerOrangeStr = thresholdInputs[0].orange.stringValue
+        let powerRedStr = thresholdInputs[0].red.stringValue
+        let tempOrangeStr = thresholdInputs[1].orange.stringValue
+        let tempRedStr = thresholdInputs[1].red.stringValue
+        let cpuOrangeStr = thresholdInputs[2].orange.stringValue
+        let cpuRedStr = thresholdInputs[2].red.stringValue
+
+        guard let powerOrange = Double(powerOrangeStr), powerOrange.isFinite,
+              let powerRed = Double(powerRedStr), powerRed.isFinite,
+              let tempOrange = Double(tempOrangeStr), tempOrange.isFinite,
+              let tempRed = Double(tempRedStr), tempRed.isFinite,
+              let cpuOrange = Double(cpuOrangeStr), cpuOrange.isFinite,
+              let cpuRed = Double(cpuRedStr), cpuRed.isFinite else {
+            return
         }
+
+        let newConfig = ThresholdConfig(
+            power: MetricThreshold(orange: powerOrange, red: powerRed),
+            temperature: MetricThreshold(orange: tempOrange, red: tempRed),
+            cpu: MetricThreshold(orange: cpuOrange, red: cpuRed)
+        )
+
+        thresholdConfig = newConfig
+        newConfig.save()
+        // 为什么：阈值有效解析并更新保存后，回调通知控制器更新内存缓存，避免刷新热路径重复从 UserDefaults 加载。
+        onThresholdConfigChanged?(newConfig)
     }
 
     // MARK: - Settings Panel
@@ -523,6 +556,7 @@ final class PopoverContentView: NSView {
         orangeLabel.textColor = .systemOrange
 
         let orangeInput = NSTextField()
+        orangeInput.identifier = NSUserInterfaceItemIdentifier("settings.section.\(index).orangeInput")
         orangeInput.stringValue = formatThreshold(orangeValue)
         orangeInput.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         orangeInput.alignment = .center
@@ -531,6 +565,7 @@ final class PopoverContentView: NSView {
         orangeInput.bezelStyle = .roundedBezel
         orangeInput.target = self
         orangeInput.action = #selector(thresholdValueChanged(_:))
+        orangeInput.delegate = self
 
         let orangeUnit = NSTextField(labelWithString: unit)
         orangeUnit.font = .systemFont(ofSize: 11)
@@ -541,6 +576,7 @@ final class PopoverContentView: NSView {
         redLabel.textColor = .systemRed
 
         let redInput = NSTextField()
+        redInput.identifier = NSUserInterfaceItemIdentifier("settings.section.\(index).redInput")
         redInput.stringValue = formatThreshold(redValue)
         redInput.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         redInput.alignment = .center
@@ -549,6 +585,7 @@ final class PopoverContentView: NSView {
         redInput.bezelStyle = .roundedBezel
         redInput.target = self
         redInput.action = #selector(thresholdValueChanged(_:))
+        redInput.delegate = self
 
         let redUnit = NSTextField(labelWithString: unit)
         redUnit.font = .systemFont(ofSize: 11)
@@ -609,7 +646,7 @@ final class PopoverContentView: NSView {
             memNote.isHidden = false
             
             if memNote.subviews.count >= 2 {
-                memNote.subviews[0].frame = NSRect(x: 0, y: 1, width: 14, height: 14) // icon
+                memNote.subviews[0].frame = NSRect(x: 0, y: 2, width: 14, height: 14) // icon
                 memNote.subviews[1].frame = NSRect(x: 20, y: 0, width: memNote.bounds.width - 20, height: 16) // label
             }
         }
@@ -618,7 +655,7 @@ final class PopoverContentView: NSView {
         if let updateRow = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.update.row" }) {
             updateRow.frame = NSRect(x: 0, y: 0, width: w, height: Layout.controlRowHeight)
             if updateRow.subviews.count >= 3 {
-                updateRow.subviews[0].frame = NSRect(x: Layout.rowLeadingInset, y: 11, width: Layout.iconSlotWidth, height: Layout.iconSlotWidth)
+                updateRow.subviews[0].frame = NSRect(x: Layout.rowLeadingInset, y: 10, width: Layout.iconSlotWidth, height: Layout.iconSlotWidth)
                 updateRow.subviews[1].frame = NSRect(x: Layout.titleX, y: 11, width: 120, height: 18)
                 updateRow.subviews[2].frame = updateRow.bounds
             }
@@ -633,7 +670,7 @@ final class PopoverContentView: NSView {
         let icon = section.subviews[0]
         let title = section.subviews[1]
         icon.frame = NSRect(x: Layout.rowLeadingInset, y: topY + 7, width: 16, height: 16)
-        title.frame = NSRect(x: Layout.titleX, y: topY + 7, width: 80, height: 18)
+        title.frame = NSRect(x: Layout.titleX, y: topY + 6, width: 80, height: 18)
 
         let inputY: CGFloat = 6
         let inputW: CGFloat = 48
@@ -729,5 +766,14 @@ final class PopoverContentView: NSView {
         let settingsHeight = settingsExpanded ? computeSettingsHeight() : 0
         let controlsHeight: CGFloat = 120 + settingsHeight
         return 8 + 240 + 8 + controlsHeight + 8 + 40 + 8
+    }
+}
+
+// MARK: - NSTextFieldDelegate
+extension PopoverContentView: NSTextFieldDelegate {
+    func controlTextDidChange(_ obj: Notification) {
+        if let textField = obj.object as? NSTextField {
+            thresholdValueChanged(textField)
+        }
     }
 }

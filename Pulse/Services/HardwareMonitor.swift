@@ -1,5 +1,4 @@
 import Foundation
-import IOKit
 
 /// 同一时刻读取到的电池与整机硬件指标。
 struct HardwareSnapshot {
@@ -7,104 +6,30 @@ struct HardwareSnapshot {
     let batteryTemperatureCelsius: Double?
 }
 
-/// 硬件传感器读取服务
-///
-/// 通过只读 AppleSMC 与 AppleSmartBattery 提取系统负载和电池温度。
-class HardwareMonitor {
-    private let smcReader: SMCReading?
-    private let batteryPropertiesReader: () -> [String: Any]?
+/// 兼容老测试用例的闭包转接适配器
+private final class LegacyBatteryPropertiesAdapter: BatteryRegistryReading {
+    private let reader: () -> [String: Any]?
 
-    /// 默认使用真实硬件源；两个注入点让部分失败与降级策略可独立验证。
-    init(
-        smcReader: SMCReading? = SMCReader(),
-        batteryPropertiesReader: (() -> [String: Any]?)? = nil
-    ) {
-        self.smcReader = smcReader
-        self.batteryPropertiesReader = batteryPropertiesReader
-            ?? HardwareMonitor.readBatteryProperties
+    init(reader: @escaping () -> [String: Any]?) {
+        self.reader = reader
     }
 
-    /// 读取两类硬件源并生成快照，不在不同更新时间的数据之间执行功率运算。
-    func getSnapshot() -> HardwareSnapshot {
-        let smc = smcReader?.readSnapshot()
-        let smcOnlySnapshot = snapshotFromSMCOnly(smc)
-
-        // 两个 SMC 指标均有效时，AppleSmartBattery 不会提供更优结果；跳过整份
-        // IOKit 属性字典可减少每次刷新产生的临时对象与系统调用。
-        if smcOnlySnapshot.systemLoadWatts != nil,
-            smcOnlySnapshot.batteryTemperatureCelsius != nil
-        {
-            return smcOnlySnapshot
+    func readMetrics(needs: BatteryRegistryReadNeeds) -> BatteryRegistryMetrics {
+        guard let props = reader() else {
+            return BatteryRegistryMetrics(systemLoadMilliwatts: nil, externalConnected: nil, temperatureCentiDegrees: nil)
         }
-
-        guard let props = batteryPropertiesReader() else {
-            return smcOnlySnapshot
-        }
-
-        // PSTR 是整机主板当前功率；旧 SystemLoad 仅在明确使用电池时安全回退。
         let telemetry = props["PowerTelemetryData"] as? [String: Any]
-        let rawSystemLoad = parseDouble(telemetry?["SystemLoad"])
+        let rawLoad = parseDouble(telemetry?["SystemLoad"])
         let externalConnected = parseBool(props["ExternalConnected"])
-        let systemLoad = MetricCalculations.preferredSystemLoadWatts(
-            smcWatts: smc?.systemPowerWatts,
-            legacyMilliwatts: rawSystemLoad,
-            externalConnected: externalConnected
-        )
+        let rawTemp = parseDouble(props["Temperature"])
 
-        // TB0T 与 AlDente 的电池温度测点一致，BMS Temperature 仅作真实值回退。
-        let rawTemperature = parseDouble(props["Temperature"])
-        let temperature = MetricCalculations.preferredBatteryTemperatureCelsius(
-            smcCelsius: smc?.batteryTemperatureCelsius,
-            bmsCentiDegrees: rawTemperature
-        )
-
-        return HardwareSnapshot(
-            systemLoadWatts: systemLoad,
-            batteryTemperatureCelsius: temperature
+        return BatteryRegistryMetrics(
+            systemLoadMilliwatts: needs.contains(.systemLoad) ? rawLoad : nil,
+            externalConnected: needs.contains(.systemLoad) ? externalConnected : nil,
+            temperatureCentiDegrees: needs.contains(.temperature) ? rawTemp : nil
         )
     }
 
-    // MARK: - Helper
-
-    /// 一次性读取 AppleSmartBattery 属性，失败时交给上层使用 SMC-only 快照。
-    private static func readBatteryProperties() -> [String: Any]? {
-        let service = IOServiceGetMatchingService(
-            kIOMainPortDefault,
-            IOServiceMatching("AppleSmartBattery")
-        )
-        guard service != IO_OBJECT_NULL else {
-            return nil
-        }
-        defer { IOObjectRelease(service) }
-
-        var propsUnmanaged: Unmanaged<CFMutableDictionary>?
-        guard IORegistryEntryCreateCFProperties(
-            service,
-            &propsUnmanaged,
-            kCFAllocatorDefault,
-            0
-        ) == kIOReturnSuccess else {
-            return nil
-        }
-        return propsUnmanaged?.takeRetainedValue() as? [String: Any]
-    }
-
-    /// 电池注册表不可用时仍保留经过范围校验的 SMC 实测值。
-    private func snapshotFromSMCOnly(_ smc: SMCSnapshot?) -> HardwareSnapshot {
-        HardwareSnapshot(
-            systemLoadWatts: MetricCalculations.preferredSystemLoadWatts(
-                smcWatts: smc?.systemPowerWatts,
-                legacyMilliwatts: nil,
-                externalConnected: nil
-            ),
-            batteryTemperatureCelsius: MetricCalculations.preferredBatteryTemperatureCelsius(
-                smcCelsius: smc?.batteryTemperatureCelsius,
-                bmsCentiDegrees: nil
-            )
-        )
-    }
-
-    /// 安全解析数字，兼容 NSNumber, Int, Double 等多种 IOKit 数据类型
     private func parseDouble(_ value: Any?) -> Double? {
         if let d = value as? Double { return d }
         if let i = value as? Int { return Double(i) }
@@ -113,10 +38,91 @@ class HardwareMonitor {
         return nil
     }
 
-    /// 安全解析 IOKit 布尔值，避免把未知状态误判为未连接电源。
     private func parseBool(_ value: Any?) -> Bool? {
         if let value = value as? Bool { return value }
         if let value = value as? NSNumber { return value.boolValue }
         return nil
+    }
+}
+
+/// 硬件传感器读取服务
+///
+/// 通过只读 AppleSMC 与 AppleSmartBattery 精确提取系统负载和电池温度。
+class HardwareMonitor {
+    private let smcReader: SMCReading?
+    private let batteryRegistryReader: BatteryRegistryReading
+
+    /// 提供兼容老接口与依赖注入的双重构造器。
+    init(
+        smcReader: SMCReading? = SMCReader(),
+        batteryPropertiesReader: (() -> [String: Any]?)? = nil
+    ) {
+        self.smcReader = smcReader
+        if let batteryPropertiesReader {
+            self.batteryRegistryReader = LegacyBatteryPropertiesAdapter(reader: batteryPropertiesReader)
+        } else {
+            self.batteryRegistryReader = AppleSmartBatteryReader()
+        }
+    }
+
+    init(
+        smcReader: SMCReading?,
+        batteryRegistryReader: BatteryRegistryReading
+    ) {
+        self.smcReader = smcReader
+        self.batteryRegistryReader = batteryRegistryReader
+    }
+
+    /// 保持向前兼容的方法名
+    func getSnapshot() -> HardwareSnapshot {
+        readSnapshot()
+    }
+
+    /// 读取两类硬件源并生成快照，按需发起精确属性读取。
+    func readSnapshot() -> HardwareSnapshot {
+        let smc = smcReader?.readSnapshot()
+        var needs = BatteryRegistryReadNeeds()
+
+        // 为什么：只在 SMC 缺失对应指标时精确定向构造 needs，按需提取 IOKit 属性，消除整体字典复制。
+        let initialLoad = MetricCalculations.preferredSystemLoadWatts(
+            smcWatts: smc?.systemPowerWatts,
+            legacyMilliwatts: nil,
+            externalConnected: nil
+        )
+        if initialLoad == nil {
+            needs.insert(.systemLoad)
+        }
+
+        let initialTemp = MetricCalculations.preferredBatteryTemperatureCelsius(
+            smcCelsius: smc?.batteryTemperatureCelsius,
+            bmsCentiDegrees: nil
+        )
+        if initialTemp == nil {
+            needs.insert(.temperature)
+        }
+
+        if needs.isEmpty {
+            return HardwareSnapshot(
+                systemLoadWatts: initialLoad,
+                batteryTemperatureCelsius: initialTemp
+            )
+        }
+
+        let batteryMetrics = batteryRegistryReader.readMetrics(needs: needs)
+
+        let finalLoad = MetricCalculations.preferredSystemLoadWatts(
+            smcWatts: smc?.systemPowerWatts,
+            legacyMilliwatts: batteryMetrics.systemLoadMilliwatts,
+            externalConnected: batteryMetrics.externalConnected
+        )
+        let finalTemp = MetricCalculations.preferredBatteryTemperatureCelsius(
+            smcCelsius: smc?.batteryTemperatureCelsius,
+            bmsCentiDegrees: batteryMetrics.temperatureCentiDegrees
+        )
+
+        return HardwareSnapshot(
+            systemLoadWatts: finalLoad,
+            batteryTemperatureCelsius: finalTemp
+        )
     }
 }

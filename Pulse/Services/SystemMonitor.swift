@@ -29,13 +29,17 @@ public class SystemMonitor {
     // 必须强引用 DispatchSource，否则初始化结束后事件监听会立即失效。
     private var memoryPressureSource: (any DispatchSourceMemoryPressure)?
 
+    // 为什么：CPU 标称频率不会按刷新周期变化，初始化一次可避免稳定失败的 sysctl 热路径。
+    private let cachedCPUFrequency: Double
+
     /// 默认采集器直接使用 Mach、sysctl 和常驻 DispatchSource，不创建外部进程。
     public convenience init() {
         self.init(
             memoryStatisticsReader: SystemMonitor.readMemoryStatistics,
             pressureLevelReader: SystemMonitor.readKernelMemoryPressureLevel,
             startPressureEvents: true,
-            uptimeReader: { ProcessInfo.processInfo.systemUptime }
+            uptimeReader: { ProcessInfo.processInfo.systemUptime },
+            cpuFrequencyReader: SystemMonitor.readCPUFrequency
         )
     }
 
@@ -44,11 +48,14 @@ public class SystemMonitor {
         memoryStatisticsReader: @escaping () -> MemoryPageStatistics?,
         pressureLevelReader: @escaping () -> Int32?,
         startPressureEvents: Bool,
-        uptimeReader: @escaping () -> TimeInterval
+        uptimeReader: @escaping () -> TimeInterval,
+        cpuFrequencyReader: () -> Double = SystemMonitor.readCPUFrequency
     ) {
         self.memoryStatisticsReader = memoryStatisticsReader
         self.pressureLevelReader = pressureLevelReader
         self.uptimeReader = uptimeReader
+        // 为什么：CPU 标称硬件频率仅在初始化时提取一次并进行缓存，不再按每秒刷新重复发起 sysctl 调用。
+        cachedCPUFrequency = cpuFrequencyReader()
         // DispatchSource 不保证启动即发送当前状态，所以初始化 sysctl 读取不可省略。
         cachedPressureLevel = MemoryPressureLevel(rawKernelValue: pressureLevelReader())
         pressureLevelReadAtUptime = uptimeReader()
@@ -74,9 +81,19 @@ public class SystemMonitor {
         var processorCount: natural_t = 0
         var processorInfo: processor_info_array_t?
         
+        let hostPort = mach_host_self()
+        guard hostPort != mach_port_t(MACH_PORT_NULL) else {
+            return 0.0
+        }
+        defer {
+            // 为什么：mach_host_self 每次调用都会递增当前 task 的发送权引用计数（send-right reference），
+            // 必须使用 mach_port_deallocate 进行显式平衡归还，避免长期运行导致端口引用泄漏。
+            mach_port_deallocate(mach_task_self_, hostPort)
+        }
+
         // 使用 Mach 内核 API 获取处理器信息
         let result = host_processor_info(
-            mach_host_self(),
+            hostPort,
             PROCESSOR_CPU_LOAD_INFO,
             &processorCount,
             &processorInfo,
@@ -150,19 +167,21 @@ public class SystemMonitor {
     /// 获取 CPU 频率
     /// - Returns: 返回 CPU 频率 (GHz)
     public func getCPUFrequency() -> Double {
-        var freq: UInt64 = 0
-        var size = MemoryLayout<UInt64>.size
-        
-        // 尝试获取 hw.cpufrequency
-        if sysctlbyname("hw.cpufrequency", &freq, &size, nil, 0) != 0 {
-            // 获取失败，尝试 hw.cpufrequency_max (部分 Apple Silicon 设备兜底)
-            if sysctlbyname("hw.cpufrequency_max", &freq, &size, nil, 0) != 0 {
-                return 0.0
+        // 为什么：返回已在初始化阶段完成读取的缓存标称频率，避免热路径频繁 sysctl 查询。
+        cachedCPUFrequency
+    }
+
+    private static func readCPUFrequency() -> Double {
+        for key in ["hw.cpufrequency", "hw.cpufrequency_max"] {
+            var frequency: UInt64 = 0
+            var size = MemoryLayout<UInt64>.size
+            if sysctlbyname(key, &frequency, &size, nil, 0) == 0,
+               size == MemoryLayout<UInt64>.size,
+               frequency > 0 {
+                return Double(frequency) / 1_000_000_000.0
             }
         }
-        
-        // 将 Hz 转换为 GHz
-        return Double(freq) / 1_000_000_000.0
+        return 0.0
     }
     
     /// 读取同一刷新周期的真实使用率与独立压力状态；压力仅做低频 sysctl 校验。

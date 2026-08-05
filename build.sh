@@ -33,14 +33,18 @@ swiftc \
     "$SOURCE_DIR/App/AppDelegate.swift" \
     "$SOURCE_DIR/Models/MemoryMetrics.swift" \
     "$SOURCE_DIR/Models/PulseSnapshot.swift" \
+    "$SOURCE_DIR/Models/StatusItemRenderModel.swift" \
     "$SOURCE_DIR/Models/MetricCalculations.swift" \
     "$SOURCE_DIR/Models/SMCValueDecoder.swift" \
     "$SOURCE_DIR/Models/PulseDefaults.swift" \
+    "$SOURCE_DIR/UI/StatusItemHost.swift" \
     "$SOURCE_DIR/UI/StatusBarController.swift" \
-    "$SOURCE_DIR/UI/StatusItemView.swift" \
+    "$SOURCE_DIR/UI/StatusItemRenderer.swift" \
     "$SOURCE_DIR/UI/RefreshIntervalControl.swift" \
     "$SOURCE_DIR/UI/PopoverContentView.swift" \
+    "$SOURCE_DIR/UI/PanelSession.swift" \
     "$SOURCE_DIR/Services/SMCReader.swift" \
+    "$SOURCE_DIR/Services/AppleSmartBatteryReader.swift" \
     "$SOURCE_DIR/Services/HardwareMonitor.swift" \
     "$SOURCE_DIR/Services/SystemMonitor.swift" \
     "$SOURCE_DIR/Services/BatteryMonitor.swift" \
