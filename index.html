@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pulse — macOS 系统监控</title>
+  <style>
+    /* ========== RESET ========== */
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    /* ========== CSS CUSTOM PROPERTIES — LIGHT MODE ========== */
+    :root {
+      --bg-primary: rgba(245, 245, 247, 0.72);
+      --bg-secondary: rgba(255, 255, 255, 0.60);
+      --bg-card: rgba(0, 0, 0, 0.04);
+      --bg-hover: rgba(0, 0, 0, 0.04);
+      --bg-input: rgba(0, 0, 0, 0.06);
+      --text-primary: #1D1D1F;
+      --text-secondary: #86868B;
+      --text-tertiary: #AEAEB2;
+      --border: rgba(0, 0, 0, 0.08);
+      --border-strong: rgba(0, 0, 0, 0.12);
+      --green: #34C759;
+      --orange: #FF9F0A;
+      --red: #FF3B30;
+      --blue: #007AFF;
+      --blue-bg: rgba(0, 122, 255, 0.12);
+      --toggle-bg: #E5E5EA;
+      --toggle-knob: #FFFFFF;
+      --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04);
+      --font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+      --font-mono: "SF Mono", "Menlo", "Monaco", monospace;
+    }
+
+    /* ========== DARK MODE ========== */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-primary: rgba(30, 30, 30, 0.78);
+        --bg-secondary: rgba(255, 255, 255, 0.06);
+        --bg-card: rgba(255, 255, 255, 0.06);
+        --bg-hover: rgba(255, 255, 255, 0.06);
+        --bg-input: rgba(255, 255, 255, 0.08);
+        --text-primary: #F5F5F7;
+        --text-secondary: #98989D;
+        --text-tertiary: #636366;
+        --border: rgba(255, 255, 255, 0.08);
+        --border-strong: rgba(255, 255, 255, 0.12);
+        --green: #30D158;
+        --orange: #FFD60A;
+        --red: #FF453A;
+        --blue: #0A84FF;
+        --blue-bg: rgba(10, 132, 255, 0.20);
+        --toggle-bg: #39393D;
+        --toggle-knob: #FFFFFF;
+        --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.2);
+      }
+    }
+
+    /* ========== MANUAL DARK MODE OVERRIDE ========== */
+    .dark-mode {
+      --bg-primary: rgba(30, 30, 30, 0.78) !important;
+      --bg-secondary: rgba(255, 255, 255, 0.06) !important;
+      --bg-card: rgba(255, 255, 255, 0.06) !important;
+      --bg-hover: rgba(255, 255, 255, 0.06) !important;
+      --bg-input: rgba(255, 255, 255, 0.08) !important;
+      --text-primary: #F5F5F7 !important;
+      --text-secondary: #98989D !important;
+      --text-tertiary: #636366 !important;
+      --border: rgba(255, 255, 255, 0.08) !important;
+      --border-strong: rgba(255, 255, 255, 0.12) !important;
+      --green: #30D158 !important;
+      --orange: #FFD60A !important;
+      --red: #FF453A !important;
+      --blue: #0A84FF !important;
+      --blue-bg: rgba(10, 132, 255, 0.20) !important;
+      --toggle-bg: #39393D !important;
+      --toggle-knob: #FFFFFF !important;
+      --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.2) !important;
+    }
+
+    .light-mode {
+      --bg-primary: rgba(245, 245, 247, 0.72) !important;
+      --bg-secondary: rgba(255, 255, 255, 0.60) !important;
+      --bg-card: rgba(0, 0, 0, 0.04) !important;
+      --bg-hover: rgba(0, 0, 0, 0.04) !important;
+      --bg-input: rgba(0, 0, 0, 0.06) !important;
+      --text-primary: #1D1D1F !important;
+      --text-secondary: #86868B !important;
+      --text-tertiary: #AEAEB2 !important;
+      --border: rgba(0, 0, 0, 0.08) !important;
+      --border-strong: rgba(0, 0, 0, 0.12) !important;
+      --green: #34C759 !important;
+      --orange: #FF9F0A !important;
+      --red: #FF3B30 !important;
+      --blue: #007AFF !important;
+      --blue-bg: rgba(0, 122, 255, 0.12) !important;
+      --toggle-bg: #E5E5EA !important;
+      --toggle-knob: #FFFFFF !important;
+      --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+    }
+
+    /* ========== BASE STYLES ========== */
+    body {
+      font-family: var(--font-family);
+      font-size: 12px;
+      color: var(--text-primary);
+      background: #E8E8ED;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 24px;
+      padding: 40px 20px;
+    }
+
+    /* ========== THEME TOGGLE BUTTONS ========== */
+    .theme-toggle-group {
+      display: flex;
+      gap: 12px;
+    }
+
+    .theme-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-secondary);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      color: var(--text-primary);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: var(--font-family);
+    }
+
+    .theme-btn:hover {
+      background: var(--bg-hover);
+    }
+
+    .theme-btn.active {
+      border-color: var(--blue);
+      background: var(--blue-bg);
+      color: var(--blue);
+    }
+
+    /* ========== PANEL CONTAINER ========== */
+    .panel {
+      width: 340px;
+      background: var(--bg-primary);
+      backdrop-filter: blur(40px) saturate(180%);
+      -webkit-backdrop-filter: blur(40px) saturate(180%);
+      border-radius: 12px;
+      border: 0.5px solid var(--border-strong);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+      overflow: hidden;
+    }
+
+    .panel-inner {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* ========== METRIC CARDS GRID ========== */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .metric-card {
+      background: var(--bg-card);
+      border-radius: 8px;
+      padding: 10px 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      transition: background 0.2s ease;
+    }
+
+    .metric-card:hover {
+      background: var(--bg-hover);
+    }
+
+    .metric-icon {
+      font-size: 10px;
+      color: var(--text-secondary);
+      line-height: 1;
+    }
+
+    .metric-title {
+      font-size: 10px;
+      color: var(--text-secondary);
+      font-weight: 400;
+      letter-spacing: 0.02em;
+    }
+
+    .metric-value {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--text-primary);
+      line-height: 1.1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .metric-sub {
+      font-size: 9px;
+      color: var(--text-tertiary);
+      font-weight: 400;
+    }
+
+    /* Status colors */
+    .metric-value.status-green { color: var(--green); }
+    .metric-value.status-orange { color: var(--orange); }
+    .metric-value.status-red { color: var(--red); }
+
+    /* ========== CONTROL ROWS ========== */
+    .controls-section {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .control-row {
+      display: flex;
+      align-items: center;
+      height: 40px;
+      padding: 0 4px;
+      gap: 12px;
+      border-top: 0.5px solid var(--border);
+    }
+
+    .control-row:first-child {
+      border-top: none;
+    }
+
+    .control-icon {
+      font-size: 13px;
+      color: var(--text-secondary);
+      width: 20px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .control-label {
+      font-size: 13px;
+      color: var(--text-primary);
+      font-weight: 400;
+      flex: 1;
+    }
+
+    .control-trailing {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Refresh interval dropdown */
+    .refresh-select {
+      appearance: none;
+      -webkit-appearance: none;
+      background: var(--bg-input);
+      border: 0.5px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 24px 4px 8px;
+      font-size: 12px;
+      font-family: var(--font-family);
+      color: var(--text-primary);
+      cursor: pointer;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2386868B'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+    }
+
+    /* Toggle switch */
+    .toggle-switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      background: var(--toggle-bg);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .toggle-switch.active {
+      background: var(--green);
+    }
+
+    .toggle-knob {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      background: var(--toggle-knob);
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+      transition: transform 0.2s ease;
+    }
+
+    .toggle-switch.active .toggle-knob {
+      transform: translateX(20px);
+    }
+
+    /* More settings chevron */
+    .chevron {
+      font-size: 10px;
+      color: var(--text-secondary);
+      transition: transform 0.2s ease;
+    }
+
+    .chevron.expanded {
+      transform: rotate(180deg);
+    }
+
+    /* More settings button (invisible, covers the row) */
+    .more-settings-btn {
+      position: absolute;
+      inset: 0;
+      background: none;
+      border: none;
+      cursor: pointer;
+    }
+
+    /* ========== SETTINGS SECTION ========== */
+    .settings-section {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+
+    .settings-section.expanded {
+      max-height: 300px;
+    }
+
+    .settings-inner {
+      padding: 12px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .settings-description {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      line-height: 1.4;
+    }
+
+    .threshold-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 32px;
+    }
+
+    .threshold-icon {
+      font-size: 12px;
+      color: var(--text-secondary);
+      width: 20px;
+      text-align: center;
+    }
+
+    .threshold-label {
+      font-size: 12px;
+      color: var(--text-primary);
+      font-weight: 500;
+      width: 56px;
+    }
+
+    .threshold-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .threshold-tag {
+      font-size: 10px;
+      font-weight: 500;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .threshold-tag.orange {
+      color: var(--orange);
+      background: rgba(255, 159, 10, 0.12);
+    }
+
+    .threshold-tag.red {
+      color: var(--red);
+      background: rgba(255, 59, 48, 0.12);
+    }
+
+    .threshold-input {
+      width: 40px;
+      height: 24px;
+      background: var(--bg-input);
+      border: 0.5px solid var(--border);
+      border-radius: 4px;
+      padding: 0 6px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      font-weight: 500;
+      color: var(--text-primary);
+      text-align: center;
+      outline: none;
+    }
+
+    .threshold-input:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 2px var(--blue-bg);
+    }
+
+    .threshold-unit {
+      font-size: 11px;
+      color: var(--text-secondary);
+      width: 16px;
+    }
+
+    .settings-note {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 0;
+      border-top: 0.5px solid var(--border);
+    }
+
+    .settings-note-icon {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .settings-note-text {
+      font-size: 11px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+    }
+
+    /* ========== BOTTOM BAR ========== */
+    .bottom-section {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .version-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 40px;
+      padding: 0 4px;
+      border-top: 0.5px solid var(--border);
+    }
+
+    .version-text {
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-weight: 400;
+    }
+
+    .update-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      background: var(--bg-input);
+      border: 0.5px solid var(--border);
+      border-radius: 6px;
+      font-size: 11px;
+      font-family: var(--font-family);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .update-btn:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-strong);
+    }
+
+    .update-btn:active {
+      transform: scale(0.98);
+    }
+
+    .quit-row {
+      display: flex;
+      align-items: center;
+      height: 40px;
+      padding: 0 4px;
+      gap: 12px;
+      border-top: 0.5px solid var(--border);
+      cursor: pointer;
+      border-radius: 0 0 12px 12px;
+      transition: background 0.2s ease;
+    }
+
+    .quit-row:hover {
+      background: var(--bg-hover);
+    }
+
+    .quit-icon {
+      font-size: 13px;
+      color: var(--text-secondary);
+      width: 20px;
+      text-align: center;
+    }
+
+    .quit-label {
+      font-size: 13px;
+      color: var(--text-primary);
+      font-weight: 400;
+    }
+
+    /* ========== ACCESSIBILITY ========== */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+      }
+    }
+
+    .theme-btn:focus-visible,
+    .control-row:focus-visible,
+    .quit-row:focus-visible,
+    .update-btn:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+
+    .threshold-input:focus-visible {
+      outline: none;
+      border-color: var(--blue);
+      box-shadow: 0 0 0 2px var(--blue-bg);
+    }
+  </style>
+</head>
+<body>
+  <!-- Theme toggle buttons -->
+  <div class="theme-toggle-group">
+    <button class="theme-btn" id="btn-light" onclick="setTheme('light')">
+      <span>☀️</span> 浅色外观 (Light)
+    </button>
+    <button class="theme-btn" id="btn-dark" onclick="setTheme('dark')">
+      <span>🌙</span> 深色外观 (Dark)
+    </button>
+  </div>
+
+  <!-- Panel -->
+  <div class="panel" id="panel">
+    <div class="panel-inner">
+      <!-- Metrics Grid -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-icon">⚡</div>
+          <div class="metric-title">系统负载</div>
+          <div class="metric-value status-green">5.4 W</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-icon">🌡️</div>
+          <div class="metric-title">电池温度</div>
+          <div class="metric-value status-green">29.8 °C</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-icon">🖥️</div>
+          <div class="metric-title">CPU 使用</div>
+          <div class="metric-value status-green">16%</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-icon">💾</div>
+          <div class="metric-title">内存使用</div>
+          <div class="metric-value status-orange">87%</div>
+          <div class="metric-sub">20.8 / 24 GB</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-icon">📊</div>
+          <div class="metric-title">内存压力</div>
+          <div class="metric-value status-orange">警告</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-icon">🔌</div>
+          <div class="metric-title">电源状态</div>
+          <div class="metric-value">已连接</div>
+          <div class="metric-sub">未充电</div>
+        </div>
+      </div>
+
+      <!-- Controls Section -->
+      <div class="controls-section">
+        <!-- Refresh Interval -->
+        <div class="control-row">
+          <div class="control-icon">⏱</div>
+          <div class="control-label">刷新间隔</div>
+          <div class="control-trailing">
+            <select class="refresh-select" id="refresh-interval">
+              <option value="1">1 秒</option>
+              <option value="2" selected>2 秒</option>
+              <option value="5">5 秒</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Launch at Login -->
+        <div class="control-row">
+          <div class="control-icon">⚡</div>
+          <div class="control-label">开机自启动</div>
+          <div class="control-trailing">
+            <div class="toggle-switch active" id="launch-toggle" onclick="this.classList.toggle('active')">
+              <div class="toggle-knob"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- More Settings -->
+        <div class="control-row" style="position: relative;">
+          <div class="control-icon">⚙️</div>
+          <div class="control-label">更多设置</div>
+          <div class="control-trailing">
+            <span class="chevron" id="settings-chevron">⌃</span>
+          </div>
+          <button class="more-settings-btn" id="more-settings-btn" onclick="toggleSettings()"></button>
+        </div>
+      </div>
+
+      <!-- Settings Section (collapsible) -->
+      <div class="settings-section" id="settings-content">
+        <div class="settings-inner">
+          <div class="settings-description">
+            数值超过阈值时，菜单栏指标颜色会变化
+          </div>
+
+          <!-- Power threshold -->
+          <div class="threshold-row">
+            <div class="threshold-icon">⚡</div>
+            <div class="threshold-label">系统负载</div>
+            <div class="threshold-group">
+              <span class="threshold-tag orange">变橙</span>
+              <input type="number" class="threshold-input" value="18">
+              <span class="threshold-unit">W</span>
+            </div>
+            <div class="threshold-group">
+              <span class="threshold-tag red">变红</span>
+              <input type="number" class="threshold-input" value="30">
+              <span class="threshold-unit">W</span>
+            </div>
+          </div>
+
+          <!-- Temperature threshold -->
+          <div class="threshold-row">
+            <div class="threshold-icon">🌡️</div>
+            <div class="threshold-label">电池温度</div>
+            <div class="threshold-group">
+              <span class="threshold-tag orange">变橙</span>
+              <input type="number" class="threshold-input" value="35">
+              <span class="threshold-unit">°C</span>
+            </div>
+            <div class="threshold-group">
+              <span class="threshold-tag red">变红</span>
+              <input type="number" class="threshold-input" value="40">
+              <span class="threshold-unit">°C</span>
+            </div>
+          </div>
+
+          <!-- CPU threshold -->
+          <div class="threshold-row">
+            <div class="threshold-icon">🖥️</div>
+            <div class="threshold-label">CPU 使用</div>
+            <div class="threshold-group">
+              <span class="threshold-tag orange">变橙</span>
+              <input type="number" class="threshold-input" value="60">
+              <span class="threshold-unit">%</span>
+            </div>
+            <div class="threshold-group">
+              <span class="threshold-tag red">变红</span>
+              <input type="number" class="threshold-input" value="80">
+              <span class="threshold-unit">%</span>
+            </div>
+          </div>
+
+          <!-- Memory pressure note -->
+          <div class="settings-note">
+            <div class="settings-note-icon">ℹ️</div>
+            <div class="settings-note-text">内存压力由 macOS 系统内核决定，不可配置</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Section -->
+      <div class="bottom-section">
+        <!-- Version + Update -->
+        <div class="version-row">
+          <span class="version-text">Pulse v1.0.2</span>
+          <button class="update-btn" id="update-btn" onclick="checkUpdate()">
+            检查更新
+          </button>
+        </div>
+
+        <!-- Quit -->
+        <div class="quit-row" onclick="quitPulse()">
+          <div class="quit-icon">⊗</div>
+          <div class="quit-label">退出 Pulse</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function setTheme(mode) {
+      const panel = document.getElementById('panel');
+      const body = document.body;
+      panel.classList.remove('dark-mode', 'light-mode');
+      body.classList.remove('dark-mode', 'light-mode');
+      if (mode === 'dark') {
+        panel.classList.add('dark-mode');
+        body.classList.add('dark-mode');
+      } else {
+        panel.classList.add('light-mode');
+        body.classList.add('light-mode');
+      }
+      document.getElementById('btn-dark').classList.toggle('active', mode === 'dark');
+      document.getElementById('btn-light').classList.toggle('active', mode === 'light');
+    }
+
+    function toggleSettings() {
+      const chevron = document.getElementById('settings-chevron');
+      const settingsContent = document.getElementById('settings-content');
+      chevron.classList.toggle('expanded');
+      settingsContent.classList.toggle('expanded');
+    }
+
+    function checkUpdate() {
+      const btn = document.getElementById('update-btn');
+      btn.textContent = '正在检查...';
+      btn.disabled = true;
+      setTimeout(() => {
+        btn.textContent = '✅ 已是最新版本';
+        btn.style.color = 'var(--green)';
+        setTimeout(() => {
+          btn.textContent = '检查更新';
+          btn.style.color = '';
+          btn.disabled = false;
+        }, 2000);
+      }, 1500);
+    }
+
+    function quitPulse() {
+      if (confirm('确定要退出 Pulse 吗？')) {
+        alert('已退出 Pulse');
+      }
+    }
+  </script>
+</body>
+</html>
