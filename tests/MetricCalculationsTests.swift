@@ -26,6 +26,7 @@ struct MetricCalculationsTests {
     private static var failed = 0
 
     static func main() {
+        _ = NSApplication.shared
         testSystemLoadConversion()
         testBatteryTemperatureConversion()
         testPreferredSystemLoad()
@@ -72,8 +73,12 @@ struct MetricCalculationsTests {
         testThresholdConfigCallbackUpdatesMemoryAndRerenders()
         // 为什么：详情面板按需创建并在关闭后销毁，离线不更新面板以降低常驻开销。
         testStatusBarControllerPanelSessionLifecycle()
+        // 为什么：折叠面板必须完整容纳第三个控制行与退出行，禁止再次被错误固定高度裁切。
+        testPanelSessionShowsAllCollapsedRows()
         // 为什么：高级设置行只在第一次展开时创建，避免面板初始化构建全量隐藏视图。
         testPopoverContentViewLazySettingsRows()
+        // 为什么：折叠动画期间内部卡片必须由窗口当前高度驱动，不能先于外框跳到终点。
+        testPopoverSettingsCollapseTracksAnimatedHeight()
         // 为什么：只在 SMC 缺失具体指标时精确读取电池对应属性，禁止无条件复制完整 IOKit 字典。
         testHardwareMonitorPreciseBatteryReadNeeds()
         testDefaultRefreshInterval()
@@ -107,8 +112,35 @@ struct MetricCalculationsTests {
         testPanelSessionInjectsThresholdConfigWithoutUserDefaultLoad()
         // 为什么：初始化阶段系统状态项外观必须首帧保底为 darkAqua，防止黑字。
         testSystemStatusItemHostDarkAquaFallback()
-        // 为什么：面板显示期间状态栏宿主必须保持高亮状态，面板关闭后恢复。
-        testStatusBarControllerKeepsHighlightStateWhilePanelVisible()
+        // 为什么：打开高亮必须等按钮跟踪周期结束，关闭则必须立即恢复。
+        testStatusItemHighlightCoordinatorDefersOpeningAndClosesImmediately()
+        // 为什么：快速关闭后，排队中的旧打开任务不得重新点亮状态栏按钮。
+        testStatusItemHighlightCoordinatorRejectsStaleOpening()
+        // 为什么：面板显示失败必须完整回滚状态栏高亮与期望状态。
+        testStatusBarControllerRollsBackFailedPanelShow()
+        // 为什么：关闭点击必须在动画完成前立即移除高亮。
+        testStatusBarControllerUnhighlightsBeforeCloseAnimationCompletes()
+        // 为什么：外部关闭必须统一经过期望状态控制。
+        testStatusBarControllerRoutesExternalDismissThroughDesiredState()
+        // 为什么：过期的 Session 关闭完成回调不得销毁新的打开状态。
+        testStatusBarControllerIgnoresStaleSessionCompletion()
+        // 为什么：状态栏图标左右内边距必须保持 5.0 pt 100% 对称，消除右侧过宽留白。
+        testStatusItemRendererLeftAndRightInsetsAreSymmetrical()
+        // 为什么：更多设置中所有 3 个指标配置行必须共享相同的单行高 36pt 与绝对统一的控件 X 轴坐标对齐。
+        testPopoverSettingsRowsShareUnifiedSingleRowGeometry()
+        // 为什么：配置行必须进行 1pt 光学基线平齐微调，底部分割线必须隔离配置区，检查更新具备 Loading 状态。
+        testPopoverOpticalAlignmentAndUpdateLoadingState()
+        // 为什么：面板 Session 必须在多次 toggle 循环中被常驻复用，封顶内存占用，消除对象频繁销毁与重复创建开销。
+        testPanelSessionReusedAcrossToggleCycles()
+        // 为什么：系统内存压力到达且面板隐藏时，必须销毁 Session 协助系统回落至极低内存。
+        testMemoryPressureDestroysHiddenPanelSession()
+        // 为什么：连续 100 次面板打开/关闭压测，物理内存 (RSS) 增量必须低于 1.0 MB，实证无累积泄露。
+        testPanelSessionMemoryLeakBenchmark()
+        // 为什么：顶部 6 项指标必须以 2x3 网格矩阵展现，且所有 6 个卡片统一固定为 58.0 pt 100% 绝对等高。
+        testPopoverMetricCardGridGeometry()
+        // 为什么：检查更新取消外部弹窗，全在底栏内无缝呈现内嵌交互状态。
+        testPopoverInlineUpdateStateTransitions()
+        testPopoverMetricValuesUseLabelColor()
         // 运行全功能与 A1 硬件口径回归测试断言集。
         testFullFeatureAndRegressionSuite()
 
@@ -1384,11 +1416,42 @@ struct MetricCalculationsTests {
             in: view,
             identifier: "metric.memoryUsage.value"
         )
+        let memorySubLabel: NSTextField? = descendant(
+            in: view,
+            identifier: "metric.memoryUsage.sub"
+        )
+        let cpuLabel: NSTextField? = descendant(
+            in: view,
+            identifier: "metric.cpu.value"
+        )
+        let powerSourceLabel: NSTextField? = descendant(
+            in: view,
+            identifier: "metric.powerSource.value"
+        )
+        let powerSourceSubLabel: NSTextField? = descendant(
+            in: view,
+            identifier: "metric.powerSource.sub"
+        )
         expectEqual(powerLabel?.stringValue ?? "", "7.1 W", "power label should use the shared formatter")
         expectEqual(
             memoryLabel?.stringValue ?? "",
             "8.00 / 16.00 GB (50%)",
-            "memory label should preserve the complete detail"
+            "memory must remain one complete value"
+        )
+        expectTrue(memorySubLabel == nil, "memory must not be split into a secondary label")
+        expectEqual(
+            cpuLabel?.stringValue ?? "",
+            "14% (2.4 GHz)",
+            "CPU must retain its optional frequency detail"
+        )
+        expectEqual(
+            powerSourceLabel?.stringValue ?? "",
+            "已连接电源 (未充电)",
+            "power source must use the snapshot description"
+        )
+        expectTrue(
+            powerSourceSubLabel == nil,
+            "power source must not be split into a secondary label"
         )
     }
 
@@ -1414,8 +1477,8 @@ struct MetricCalculationsTests {
         )
 
         let titleIDs = [
-            "metric.power.title",
             "control.refresh.title",
+            "control.more.title",
             "control.quit.title",
         ]
         let titleXs = titleIDs.compactMap { identifier -> Int? in
@@ -1439,7 +1502,7 @@ struct MetricCalculationsTests {
 
         let separators = allDescendants(in: view).compactMap { child -> NSBox? in
             guard let box = child as? NSBox,
-                box.identifier?.rawValue.hasSuffix(".separator") == true
+                box.identifier?.rawValue.hasPrefix("control.separator.") == true
             else {
                 return nil
             }
@@ -1451,7 +1514,7 @@ struct MetricCalculationsTests {
             return "\(Int(origin.x.rounded())):\(Int((origin.x + separator.frame.width).rounded()))"
         }
         expectTrue(
-            separatorEdges.count == 5 && Set(separatorEdges).count == 1,
+            separatorEdges.count == 2 && Set(separatorEdges).count == 1,
             "all metric and setting separators should share one horizontal span"
         )
     }
@@ -1804,6 +1867,7 @@ struct MetricCalculationsTests {
             rendered: RenderedStatusItem(image: dummyImage, geometry: geometry)
         )
         let controller = StatusBarController(
+            statusItemHost: FakeStatusItemHost(),
             launchController: StubLaunchController(),
             statusRenderer: spy
         )
@@ -1869,26 +1933,37 @@ struct MetricCalculationsTests {
     }
 
     private final class SpyPanelSession: PanelSessionControlling {
-        var isVisible: Bool = false
+        var isVisible = false
+        var showResult = true
         private(set) var showCount = 0
         private(set) var updateCount = 0
         private(set) var closeCount = 0
         private(set) var lastUpdatedSnapshot: PulseSnapshot?
+        private(set) var lastSetLaunchAtLoginState: Bool?
         let configuration: PanelSessionConfiguration
 
         init(configuration: PanelSessionConfiguration) {
             self.configuration = configuration
         }
 
-        func show() {
+        @discardableResult
+        func show() -> Bool {
             showCount += 1
-            isVisible = true
+            isVisible = showResult
+            return showResult
         }
 
-        private(set) var lastSetLaunchAtLoginState: Bool?
+        func close() {
+            closeCount += 1
+            isVisible = false
+        }
 
-        func setLaunchAtLoginEnabled(_ enabled: Bool) {
-            lastSetLaunchAtLoginState = enabled
+        func completeClose() {
+            configuration.onDidClose(configuration.identity)
+        }
+
+        func requestDismiss(_ reason: PanelDismissReason) {
+            configuration.onDismissRequested(reason)
         }
 
         func update(snapshot: PulseSnapshot) {
@@ -1896,10 +1971,8 @@ struct MetricCalculationsTests {
             lastUpdatedSnapshot = snapshot
         }
 
-        func close() {
-            closeCount += 1
-            isVisible = false
-            configuration.onClose()
+        func setLaunchAtLoginEnabled(_ enabled: Bool) {
+            lastSetLaunchAtLoginState = enabled
         }
     }
 
@@ -1924,6 +1997,7 @@ struct MetricCalculationsTests {
         )
 
         let controller = StatusBarController(
+            statusItemHost: FakeStatusItemHost(),
             launchController: StubLaunchController(),
             statusRenderer: dummyRenderer,
             panelSessionFactory: { config in
@@ -1953,8 +2027,10 @@ struct MetricCalculationsTests {
         expectEqual(Double(weakSession?.updateCount ?? 0), 2, "visible session must receive new updates")
 
         // 模拟关闭面板
-        weakSession?.close()
-        expectTrue(weakSession == nil, "closing panel session must release strong reference and allow deallocation")
+        controller.togglePanelForTesting()
+        expectTrue(weakSession != nil, "session must remain retained while close transition is pending")
+        weakSession?.completeClose()
+        expectTrue(weakSession != nil, "matching close completion retains session for instance reuse")
 
         // 面板关闭后后续更新不增加已关 session 的 updateCount
         controller.update(snapshot: makePulseSnapshot(cpuUsage: 50))
@@ -1994,6 +2070,65 @@ struct MetricCalculationsTests {
             $0.identifier?.rawValue.hasPrefix("settings.section.") == true && !($0 is NSTextField)
         }
         expectEqual(Double(reexpandedSections.count), 3, "re-expanding must reuse created settings sections")
+    }
+
+    private static func testPopoverSettingsCollapseTracksAnimatedHeight() {
+        let view = PopoverContentView(
+            frame: NSRect(x: 0, y: 0, width: 340, height: PopoverContentView.collapsedHeight)
+        )
+        var requestedHeight: CGFloat?
+        view.onPanelHeightChanged = { requestedHeight = $0 }
+
+        guard let moreButton: NSButton = descendant(in: view, identifier: "control.more.button"),
+              let action = moreButton.action,
+              let target = moreButton.target else {
+            recordFailure("more settings button must exist")
+            return
+        }
+
+        NSApp.sendAction(action, to: target, from: moreButton)
+        expectEqual(Double(requestedHeight ?? -1), 602.0, "expansion must request the full panel height")
+        view.frame.size.height = 602
+        view.layoutSubtreeIfNeeded()
+
+        NSApp.sendAction(action, to: target, from: moreButton)
+        expectEqual(Double(requestedHeight ?? -1), 398.0, "collapse must request the collapsed panel height")
+        view.layoutSubtreeIfNeeded()
+
+        let controlsGroup: NSView? = descendant(in: view, identifier: "group.controls")
+        let updateRow: NSView? = descendant(in: view, identifier: "settings.update.row")
+        expectEqual(
+            Double(controlsGroup?.frame.height ?? -1),
+            324.0,
+            "controls card must remain expanded before the outer frame starts shrinking"
+        )
+        expectFalse(updateRow?.isHidden ?? true, "settings must remain visible at the start of collapse")
+
+        view.frame.size.height = 500
+        view.layoutSubtreeIfNeeded()
+
+        let quitGroup: NSView? = descendant(in: view, identifier: "group.quit")
+        let descriptionLabel: NSView? = descendant(in: view, identifier: "settings.desc")
+        expectEqual(
+            Double(controlsGroup?.frame.height ?? -1),
+            222.0,
+            "controls card must use the panel's intermediate height"
+        )
+        expectTrue(
+            (controlsGroup as? NSBox)?.contentView?.layer?.masksToBounds == true,
+            "controls card must clip settings rows that move below its animated bounds"
+        )
+        expectEqual(Double(quitGroup?.frame.minY ?? -1), 8.0, "quit card must follow the outer bottom edge")
+        expectFalse(updateRow?.isHidden ?? true, "settings must stay visible while part of the settings region remains")
+        expectTrue(
+            (descriptionLabel?.frame.maxY ?? .greatestFiniteMagnitude) <= 102.0,
+            "settings content must stay below the three fixed control rows during collapse"
+        )
+
+        view.frame.size.height = PopoverContentView.collapsedHeight
+        view.layoutSubtreeIfNeeded()
+        expectEqual(Double(controlsGroup?.frame.height ?? -1), 120.0, "controls card must end at its collapsed height")
+        expectTrue(updateRow?.isHidden ?? false, "settings must hide at the fully collapsed frame")
     }
 
     private final class SpyBatteryRegistryReader: BatteryRegistryReading {
@@ -2115,46 +2250,33 @@ struct MetricCalculationsTests {
     }
 
     private static func testStatusBarControllerFourClicksAlternatingToggle() {
-        var createdSessionCount = 0
-
         let fakeHost = FakeStatusItemHost(isAttachedToWindow: true, effectiveAppearance: NSAppearance(named: .darkAqua)!, backingScaleFactor: 2.0)
-        let dummyImage = NSImage(size: NSSize(width: 100, height: 22))
-        let geometry = StatusItemGeometry(
-            canvasSize: NSSize(width: 100, height: 22),
-            powerIconFrame: .zero,
-            temperatureIconFrame: .zero,
-            memoryIconFrame: .zero,
-            cpuIconFrame: .zero,
-            powerTextOrigin: .zero,
-            temperatureTextOrigin: .zero,
-            memoryTextOrigin: .zero,
-            cpuTextOrigin: .zero
-        )
-        let spyRenderer = SpyStatusItemRenderer(rendered: RenderedStatusItem(image: dummyImage, geometry: geometry))
+        var sessions: [SpyPanelSession] = []
 
-        let controller = StatusBarController(
-            statusItemHost: fakeHost,
-            launchController: StubLaunchController(),
-            statusRenderer: spyRenderer,
-            panelSessionFactory: { config in
-                createdSessionCount += 1
-                let spy = SpyPanelSession(configuration: config)
-                return spy
-            }
-        )
+        let controller = makeStatusBarControllerForPanelTests(host: fakeHost) { config in
+            let session = SpyPanelSession(configuration: config)
+            sessions.append(session)
+            return session
+        }
 
-        // 模拟连续 4 次点击状态栏
+        // 模拟连续 4 次点击状态栏并模拟动画完成
         controller.togglePanelForTesting() // 第 1 次：open
-        expectEqual(Double(createdSessionCount), 1, "first click must open panel session")
+        expectEqual(Double(sessions.count), 1, "first click must create one session")
 
         controller.togglePanelForTesting() // 第 2 次：close
-        expectEqual(Double(createdSessionCount), 1, "second click must close panel without creating new session")
+        sessions[0].completeClose()
 
         controller.togglePanelForTesting() // 第 3 次：open
-        expectEqual(Double(createdSessionCount), 2, "third click must open new panel session")
+        expectEqual(Double(sessions.count), 1, "third click after close completion must REUSE the existing session")
 
         controller.togglePanelForTesting() // 第 4 次：close
-        expectEqual(Double(createdSessionCount), 2, "fourth click must close panel session")
+        sessions[0].completeClose()
+
+        expectEqual(Double(sessions.count), 1, "four completed toggle transitions must reuse single session")
+        expectTrue(
+            fakeHost.panelPresentationRequests == [true, false, true, false],
+            "four clicks must alternate presentation intent exactly"
+        )
     }
 
     private static func testLaunchAtLoginFailureUpdatesPanelSwitchState() {
@@ -2203,6 +2325,7 @@ struct MetricCalculationsTests {
         )
 
         let sessionConfig = PanelSessionConfiguration(
+            identity: UUID(),
             anchorButtonProvider: { nil },
             refreshInterval: 1.0,
             thresholdConfig: injectedConfig,
@@ -2210,24 +2333,108 @@ struct MetricCalculationsTests {
             onRefreshIntervalChanged: { _ in },
             onThresholdConfigChanged: { _ in },
             onLaunchAtLoginToggled: { _ in },
-            onCheckForUpdates: {},
+            onCheckForUpdates: { $0(.upToDate) },
             onQuit: {},
-            onClose: {}
+            onDismissRequested: { _ in },
+            onDidClose: { _ in }
         )
 
         let session = PanelSession(configuration: sessionConfig)
         expectTrue(session.isVisible == false, "session initial state should be closed")
     }
 
+    private static func testPanelSessionShowsAllCollapsedRows() {
+        let configuration = PanelSessionConfiguration(
+            identity: UUID(),
+            anchorButtonProvider: { nil },
+            refreshInterval: 1.0,
+            thresholdConfig: .defaults(),
+            launchAtLoginEnabled: false,
+            onRefreshIntervalChanged: { _ in },
+            onThresholdConfigChanged: { _ in },
+            onLaunchAtLoginToggled: { _ in },
+            onCheckForUpdates: { $0(.upToDate) },
+            onQuit: {},
+            onDismissRequested: { _ in },
+            onDidClose: { _ in }
+        )
+        let session = PanelSession(configuration: configuration)
+        let panel = Mirror(reflecting: session).children
+            .first(where: { $0.label == "panel" })?.value as? NSPanel
+        let root = panel?.contentView
+        root?.layoutSubtreeIfNeeded()
+
+        expectEqual(
+            Double(panel?.frame.height ?? -1),
+            398.0,
+            "collapsed panel must fit all rows"
+        )
+
+        let moreRow: NSView? = root.flatMap {
+            descendant(in: $0, identifier: "control.more.row")
+        }
+        let quitRow: NSView? = root.flatMap {
+            descendant(in: $0, identifier: "control.quit.button")
+        }
+        for (name, row) in [("more", moreRow), ("quit", quitRow)] {
+            guard let root, let row, let superview = row.superview else {
+                recordFailure("\(name) row must exist")
+                continue
+            }
+            let origin = superview.convert(row.frame.origin, to: root)
+            expectTrue(origin.y >= 0, "\(name) row must not be clipped below the panel")
+            expectTrue(
+                origin.y + row.frame.height <= root.bounds.height,
+                "\(name) row must fit inside the panel"
+            )
+        }
+    }
+
     private static func testSystemStatusItemHostDarkAquaFallback() {
-        let host = SystemStatusItemHost()
-        let appearance = host.effectiveAppearance
+        let appearance = SystemStatusItemHost.resolvedEffectiveAppearance(hostedAppearance: nil)
         expectEqual(appearance.name.rawValue, NSAppearance.Name.darkAqua.rawValue, "initial status item host appearance must fallback to darkAqua to prevent black text")
     }
 
-    private static func testStatusBarControllerKeepsHighlightStateWhilePanelVisible() {
-        let fakeHost = FakeStatusItemHost(isAttachedToWindow: true, effectiveAppearance: NSAppearance(named: .darkAqua)!, backingScaleFactor: 2.0)
-        let dummyImage = NSImage(size: NSSize(width: 100, height: 22))
+    private static func testStatusItemHighlightCoordinatorDefersOpeningAndClosesImmediately() {
+        var scheduled: [() -> Void] = []
+        var applied: [Bool] = []
+        let coordinator = StatusItemHighlightCoordinator(
+            schedule: { scheduled.append($0) },
+            apply: { applied.append($0) }
+        )
+
+        coordinator.setPanelPresented(true)
+        expectEqual(Double(applied.count), 0, "opening highlight must be deferred until button tracking ends")
+        expectEqual(Double(scheduled.count), 1, "opening must schedule exactly one next-run-loop application")
+
+        scheduled.removeFirst()()
+        expectTrue(applied == [true], "scheduled opening must apply native highlight once")
+
+        coordinator.setPanelPresented(false)
+        expectTrue(applied == [true, false], "closing must remove highlight synchronously")
+    }
+
+    private static func testStatusItemHighlightCoordinatorRejectsStaleOpening() {
+        var scheduled: [() -> Void] = []
+        var applied: [Bool] = []
+        let coordinator = StatusItemHighlightCoordinator(
+            schedule: { scheduled.append($0) },
+            apply: { applied.append($0) }
+        )
+
+        coordinator.setPanelPresented(true)
+        coordinator.setPanelPresented(false)
+        scheduled.removeFirst()()
+
+        expectTrue(applied == [false], "stale opening task must not re-highlight after a close request")
+        expectFalse(coordinator.desiredPresented, "latest desired presentation must remain closed")
+    }
+
+    private static func makeStatusBarControllerForPanelTests(
+        host: FakeStatusItemHost,
+        panelSessionFactory: @escaping PanelSessionFactory
+    ) -> StatusBarController {
+        let image = NSImage(size: NSSize(width: 100, height: 22))
         let geometry = StatusItemGeometry(
             canvasSize: NSSize(width: 100, height: 22),
             powerIconFrame: .zero,
@@ -2239,22 +2446,389 @@ struct MetricCalculationsTests {
             memoryTextOrigin: .zero,
             cpuTextOrigin: .zero
         )
-        let spyRenderer = SpyStatusItemRenderer(rendered: RenderedStatusItem(image: dummyImage, geometry: geometry))
-
-        let controller = StatusBarController(
-            statusItemHost: fakeHost,
-            launchController: StubLaunchController(),
-            statusRenderer: spyRenderer,
-            panelSessionFactory: { config in
-                SpyPanelSession(configuration: config)
-            }
+        let renderer = SpyStatusItemRenderer(
+            rendered: RenderedStatusItem(image: image, geometry: geometry)
         )
+        return StatusBarController(
+            statusItemHost: host,
+            launchController: StubLaunchController(),
+            statusRenderer: renderer,
+            panelSessionFactory: panelSessionFactory
+        )
+    }
 
-        expectFalse(fakeHost.isHighlighted, "initial host highlight state must be false")
+    private static func testStatusBarControllerRollsBackFailedPanelShow() {
+        let host = FakeStatusItemHost()
+        var spy: SpyPanelSession?
+        let controller = makeStatusBarControllerForPanelTests(host: host) { config in
+            let session = SpyPanelSession(configuration: config)
+            session.showResult = false
+            spy = session
+            return session
+        }
+
         controller.togglePanelForTesting()
-        expectTrue(fakeHost.isHighlighted, "host must be highlighted while panel is visible")
+
+        expectTrue(host.panelPresentationRequests == [false], "failed show must explicitly restore unhighlighted state")
+        expectFalse(host.isPanelPresented, "failed show must not leave status item highlighted")
+        expectFalse(controller.desiredPanelVisibleForTesting, "failed show must roll desired state back to closed")
+        expectTrue(controller.hasPanelSessionForTesting == false, "failed show must release the unusable session")
+        expectEqual(Double(spy?.showCount ?? 0), 1, "failed session must be attempted exactly once")
+    }
+
+    private static func testStatusBarControllerUnhighlightsBeforeCloseAnimationCompletes() {
+        let host = FakeStatusItemHost()
+        var spy: SpyPanelSession?
+        let controller = makeStatusBarControllerForPanelTests(host: host) { config in
+            let session = SpyPanelSession(configuration: config)
+            spy = session
+            return session
+        }
+
         controller.togglePanelForTesting()
-        expectFalse(fakeHost.isHighlighted, "host highlight state must be restored to false after panel close")
+        expectTrue(host.isPanelPresented, "successful open must request persistent highlight")
+
+        controller.togglePanelForTesting()
+        expectFalse(host.isPanelPresented, "close click must remove highlight before animation completion")
+        expectEqual(Double(spy?.closeCount ?? 0), 1, "close transition must start exactly once")
+        expectTrue(controller.hasPanelSessionForTesting, "session may remain retained until close animation completes")
+
+        spy?.completeClose()
+        expectTrue(controller.hasPanelSessionForTesting, "matching close completion retains session for reuse")
+    }
+
+    private static func testStatusBarControllerRoutesExternalDismissThroughDesiredState() {
+        let host = FakeStatusItemHost()
+        var spy: SpyPanelSession?
+        let controller = makeStatusBarControllerForPanelTests(host: host) { config in
+            let session = SpyPanelSession(configuration: config)
+            spy = session
+            return session
+        }
+
+        controller.togglePanelForTesting()
+        spy?.requestDismiss(.outsideClick)
+
+        expectFalse(controller.desiredPanelVisibleForTesting, "outside click must update the controller source of truth")
+        expectFalse(host.isPanelPresented, "outside click must restore status item immediately")
+        expectEqual(Double(spy?.closeCount ?? 0), 1, "outside click must enter the unified close path")
+    }
+
+    private static func testStatusBarControllerIgnoresStaleSessionCompletion() {
+        let host = FakeStatusItemHost()
+        var sessions: [SpyPanelSession] = []
+        let controller = makeStatusBarControllerForPanelTests(host: host) { config in
+            let session = SpyPanelSession(configuration: config)
+            sessions.append(session)
+            return session
+        }
+
+        controller.togglePanelForTesting() // open
+        let first = sessions[0]
+        controller.togglePanelForTesting() // start close
+        controller.togglePanelForTesting() // reopen the same desired interaction
+        first.completeClose()              // simulate an obsolete completion racing afterward
+
+        expectTrue(controller.desiredPanelVisibleForTesting, "latest click must still require an open panel")
+        expectTrue(host.isPanelPresented, "obsolete close completion must not remove current highlight")
+        expectTrue(controller.hasPanelSessionForTesting, "obsolete completion must not clear the current session")
+    }
+
+    private static func testStatusItemRendererLeftAndRightInsetsAreSymmetrical() {
+        let renderer = StatusItemRenderer()
+        let snapshot = makePulseSnapshot(cpuUsage: 7)
+        let thresholds = ThresholdConfig(
+            power: MetricThreshold(orange: 20, red: 50),
+            temperature: MetricThreshold(orange: 35, red: 40),
+            cpu: MetricThreshold(orange: 60, red: 80)
+        )
+        let model = StatusItemRenderModel.make(snapshot: snapshot, thresholds: thresholds)
+        let geometry = renderer.layout(for: model)
+
+        let leftMargin = geometry.powerIconFrame.minX
+        let font: NSFont = .monospacedDigitSystemFont(ofSize: 9, weight: .semibold)
+        let maxRightTextWidth = max(
+            (model.memoryText as NSString).size(withAttributes: [.font: font]).width,
+            (model.cpuText as NSString).size(withAttributes: [.font: font]).width
+        )
+        let rightMargin = geometry.canvasSize.width - (geometry.memoryTextOrigin.x + maxRightTextWidth)
+
+        expectEqual(Double(leftMargin), 5.0, "status item left inset must be exactly 5.0 pt")
+        expectTrue(abs(rightMargin - 5.0) < 0.2, "status item right inset must be approximately 5.0 pt (symmetrical with left inset)")
+    }
+
+    private static func testPopoverSettingsRowsShareUnifiedSingleRowGeometry() {
+        let view = PopoverContentView(frame: NSRect(x: 0, y: 0, width: 340, height: 320))
+        let moreButton: NSButton? = descendant(in: view, identifier: "control.more.button")
+        if let moreButton, let action = moreButton.action, let target = moreButton.target {
+            NSApp.sendAction(action, to: target, from: moreButton)
+        }
+        view.layoutSubtreeIfNeeded()
+
+        let sections = allDescendants(in: view).filter { v in
+            guard let id = v.identifier?.rawValue else { return false }
+            return id.hasPrefix("settings.section.") && v.subviews.count >= 8
+        }
+        expectEqual(Double(sections.count), 3, "there must be exactly three settings metric threshold sections")
+
+        let heights = sections.map(\.frame.height)
+        expectTrue(heights.allSatisfy { $0 == 36.0 }, "all 3 settings sections must share the unified single-row height of 36pt")
+
+        let orangeInputXs = sections.compactMap { sec -> CGFloat? in
+            sec.subviews.first(where: { $0.identifier?.rawValue.hasSuffix(".orangeInput") == true })?.frame.minX
+        }
+        let redInputXs = sections.compactMap { sec -> CGFloat? in
+            sec.subviews.first(where: { $0.identifier?.rawValue.hasSuffix(".redInput") == true })?.frame.minX
+        }
+        expectTrue(Set(orangeInputXs.map { Int($0.rounded()) }).count == 1, "all orange inputs across sections must share the exact same X coordinate")
+        expectTrue(Set(redInputXs.map { Int($0.rounded()) }).count == 1, "all red inputs across sections must share the exact same X coordinate")
+    }
+
+    private static func testPopoverOpticalAlignmentAndUpdateLoadingState() {
+        let view = PopoverContentView(frame: NSRect(x: 0, y: 0, width: 340, height: 320))
+        let moreButton: NSButton? = descendant(in: view, identifier: "control.more.button")
+        if let moreButton, let action = moreButton.action, let target = moreButton.target {
+            NSApp.sendAction(action, to: target, from: moreButton)
+        }
+        view.layoutSubtreeIfNeeded()
+
+        let firstSection: NSView? = descendant(in: view, identifier: "settings.section.0")
+        expectTrue(firstSection != nil, "first section should exist")
+        if let sec = firstSection, sec.subviews.count >= 8 {
+            let iconY = sec.subviews[0].frame.minY
+            let titleY = sec.subviews[1].frame.minY
+            let labelY = sec.subviews[2].frame.minY
+            let unitY = sec.subviews[4].frame.minY
+            expectEqual(Double(iconY), 10.0, "section icon Y must be optically raised to 10pt")
+            expectEqual(Double(titleY), 8.0, "section title Y must be optically lowered to 8pt")
+            expectEqual(Double(labelY), 9.0, "section orange label Y must be optically lowered to 9pt")
+            expectEqual(Double(unitY), 9.0, "section orange unit Y must be optically lowered to 9pt")
+        }
+
+        let separators = allDescendants(in: view).filter {
+            $0.identifier?.rawValue.hasPrefix("settings.separator.") == true
+        }
+        expectEqual(Double(separators.count), 4, "there must be exactly 4 settings separators including the bottom divider")
+
+        let separatorXs = separators.map(\.frame.minX)
+        let separatorWidths = separators.map(\.frame.width)
+        expectTrue(separatorXs.allSatisfy { $0 == 38.0 }, "all 4 settings separators must share the exact same X coordinate of 38pt")
+        expectTrue(Set(separatorWidths.map { Int($0.rounded()) }).count == 1, "all 4 settings separators must share the exact same width")
+
+        let separatorYs = separators.map(\.frame.minY).sorted(by: >)
+        expectEqual(Double(separatorYs.count), 4, "4 separators count")
+        if separatorYs.count == 4 {
+            expectEqual(Double(separatorYs[0]), 144.0, "separator 0 Y must be 144pt")
+            expectEqual(Double(separatorYs[1]), 108.0, "separator 1 Y must be 108pt")
+            expectEqual(Double(separatorYs[2]), 72.0, "separator 2 Y must be 72pt")
+            expectEqual(Double(separatorYs[3]), 36.0, "separator 3 Y must be 36pt")
+        }
+
+        let memNote: NSView? = descendant(in: view, identifier: "settings.memNote")
+        expectTrue(memNote != nil, "settings memNote should exist")
+        if let memNote {
+            expectEqual(Double(memNote.frame.height), 36.0, "memNote row height must be unified to 36pt")
+            if memNote.subviews.count >= 2 {
+                let memLabel = memNote.subviews[1]
+                expectEqual(Double(memLabel.frame.minX), 26.0, "memLabel relative X must be 26pt to align with 38pt baseline")
+            }
+        }
+
+        let updateRow: NSView? = descendant(in: view, identifier: "settings.update.row")
+        expectTrue(updateRow != nil, "settings update row should exist")
+        if let updateRow {
+            expectEqual(Double(updateRow.frame.height), 36.0, "update row height must be unified to 36pt")
+        }
+
+        let versionLabel: NSTextField? = descendant(in: view, identifier: "settings.version.label")
+        expectTrue(versionLabel != nil, "settings version label should exist")
+        expectTrue(versionLabel?.stringValue.hasPrefix("Pulse v") == true, "version label text should start with 'Pulse v'")
+
+        let updateButton: NSButton? = descendant(in: view, identifier: "settings.update.button")
+        expectTrue(updateButton != nil, "settings update button should exist")
+
+        view.setUpdateChecking(true)
+        expectEqual(updateButton?.title ?? "", "正在检查...", "update button title must change to loading text while checking")
+        expectFalse(updateButton?.isEnabled ?? true, "update button must be disabled while checking")
+
+        view.setUpdateChecking(false)
+        expectEqual(updateButton?.title ?? "", "检查更新", "update button title must restore default text after checking")
+        expectTrue(updateButton?.isEnabled ?? false, "update button must be enabled after checking")
+    }
+
+    private static func testPanelSessionReusedAcrossToggleCycles() {
+        let host = FakeStatusItemHost()
+        var createdCount = 0
+
+        let controller = makeStatusBarControllerForPanelTests(host: host) { config in
+            createdCount += 1
+            return SpyPanelSession(configuration: config)
+        }
+
+        // 第一次展开面板
+        controller.togglePanelForTesting()
+        expectTrue(controller.hasPanelSessionForTesting, "first panel session should exist")
+        expectEqual(Double(createdCount), 1.0, "panelSession should be created once on first show")
+
+        // 关闭面板
+        controller.togglePanelForTesting()
+
+        // 第二次展开面板：必须复用已有 Session，绝对不能再次调用 makePanelSession()！
+        controller.togglePanelForTesting()
+        expectTrue(controller.hasPanelSessionForTesting, "panel session should still exist on reuse")
+        expectEqual(Double(createdCount), 1.0, "panelSession must be REUSED without invoking factory again")
+    }
+
+    private static func testMemoryPressureDestroysHiddenPanelSession() {
+        let host = FakeStatusItemHost()
+        let controller = makeStatusBarControllerForPanelTests(host: host) { config in
+            SpyPanelSession(configuration: config)
+        }
+
+        controller.togglePanelForTesting()
+        expectTrue(controller.hasPanelSessionForTesting, "session should exist when visible")
+
+        controller.togglePanelForTesting()
+
+        // 模拟内存压力通知触发清理
+        controller.handleMemoryPressureWarning()
+        expectFalse(controller.hasPanelSessionForTesting, "hidden panelSession must be destroyed on memory pressure warning")
+    }
+
+    private static func getProcessMemoryMB() -> Double {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+        let kerr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        guard kerr == KERN_SUCCESS else { return 0.0 }
+        return Double(info.resident_size) / 1024.0 / 1024.0
+    }
+
+    private static func testPanelSessionMemoryLeakBenchmark() {
+        let host = FakeStatusItemHost()
+        let controller = makeStatusBarControllerForPanelTests(host: host) { config in
+            SpyPanelSession(configuration: config)
+        }
+
+        // 第一次打开与关闭，确立常驻基础工作集
+        controller.togglePanelForTesting()
+        controller.togglePanelForTesting()
+        let baselineMB = getProcessMemoryMB()
+
+        // 连续模拟 100 次打开/关闭循环压测
+        for _ in 1...100 {
+            controller.togglePanelForTesting()
+            controller.update(snapshot: makePulseSnapshot(cpuUsage: 25))
+            controller.togglePanelForTesting()
+        }
+
+        let afterCyclesMB = getProcessMemoryMB()
+        let memoryDeltaMB = afterCyclesMB - baselineMB
+
+        // 断言 100 次循环后物理内存 RSS 增量必须低于 1.0 MB
+        expectTrue(memoryDeltaMB < 1.0, "memory delta after 100 open/close cycles must be under 1.0 MB (got \(memoryDeltaMB) MB)")
+    }
+
+    private static func testPopoverMetricCardGridGeometry() {
+        let view = PopoverContentView(
+            frame: NSRect(x: 0, y: 0, width: 340, height: 398)
+        )
+        view.layoutSubtreeIfNeeded()
+
+        let pairFrames = (0..<3).compactMap { index -> NSRect? in
+            let pair: NSView? = descendant(in: view, identifier: "metric.pair.\(index)")
+            return pair?.frame
+        }
+        expectEqual(Double(pairFrames.count), 3.0, "metrics must render as exactly three shared pair cards")
+        for frame in pairFrames {
+            expectEqual(Double(frame.height), 58.0, "each shared pair card must be 58.0 pt high")
+        }
+        if pairFrames.count == 3 {
+            expectTrue(
+                pairFrames[0].minY > pairFrames[1].maxY
+                    && pairFrames[1].minY > pairFrames[2].maxY,
+                "shared pair cards must descend with visible gaps and no overlap"
+            )
+            expectTrue(
+                Set(pairFrames.map { Int($0.width.rounded()) }).count == 1,
+                "all three shared pair cards must use the same full width"
+            )
+        }
+
+        let orderedRows = [
+            ["power", "cpu"],
+            ["memoryUsage", "memoryPressure"],
+            ["temperature", "powerSource"],
+        ]
+        let cardFrames = orderedRows.map { keys in
+            keys.compactMap { key -> NSRect? in
+                let card: NSView? = descendant(in: view, identifier: "metric.\(key).row")
+                return card?.frame
+            }
+        }
+
+        expectTrue(
+            cardFrames.allSatisfy { $0.count == 2 },
+            "every metric grid row must contain exactly two cards"
+        )
+        for frames in cardFrames where frames.count == 2 {
+            expectEqual(Double(frames[0].minY), Double(frames[1].minY), "paired cards must share one row")
+            expectTrue(frames[0].minX < frames[1].minX, "the first metric in each pair must occupy the left column")
+            expectEqual(Double(frames[0].height), 58.0, "left metric card height must be 58.0 pt")
+            expectEqual(Double(frames[1].height), 58.0, "right metric card height must be 58.0 pt")
+            expectEqual(Double(frames[0].width), Double(frames[1].width), "grid columns must have equal widths")
+            expectEqual(
+                Double(frames[0].maxX),
+                Double(frames[1].minX),
+                "paired metric cells must meet at one shared central divider"
+            )
+        }
+        if cardFrames.allSatisfy({ $0.count == 2 }) {
+            expectTrue(
+                cardFrames[0][0].minY > cardFrames[1][0].maxY
+                    && cardFrames[1][0].minY > cardFrames[2][0].maxY,
+                "metric card rows must descend with visible gaps and no overlap"
+            )
+        }
+    }
+
+    private static func testPopoverInlineUpdateStateTransitions() {
+        let view = PopoverContentView(frame: NSRect(x: 0, y: 0, width: 340, height: 416))
+        let moreButton: NSButton? = descendant(in: view, identifier: "control.more.button")
+        if let moreButton, let action = moreButton.action, let target = moreButton.target {
+            NSApp.sendAction(action, to: target, from: moreButton)
+        }
+        view.layoutSubtreeIfNeeded()
+
+        view.setUpdateResult(.upToDate)
+        let upToDateLabel = descendant(in: view, identifier: "update.state.upToDate")
+        expectTrue(upToDateLabel != nil, "inline upToDate indicator must be visible on upToDate result")
+
+        view.setUpdateResult(.updateAvailable("1.1.0"))
+        let updateAvailableLabel = descendant(in: view, identifier: "update.state.available")
+        expectTrue(updateAvailableLabel != nil, "inline updateAvailable indicator must be visible on updateAvailable result")
+    }
+
+    private static func testPopoverMetricValuesUseLabelColor() {
+        let view = PopoverContentView(frame: NSRect(x: 0, y: 0, width: 340, height: 432))
+        view.update(snapshot: makePulseSnapshot(
+            power: 25.0,
+            memoryUsagePercentage: 80.0,
+            pressureLevel: .warning,
+            temperature: 38.0,
+            cpuUsage: 70.0
+        ))
+
+        for key in ["power", "temperature", "memoryUsage", "memoryPressure", "cpu", "powerSource"] {
+            let label: NSTextField? = descendant(in: view, identifier: "metric.\(key).value")
+            expectTrue(
+                label?.textColor?.isEqual(NSColor.labelColor) == true,
+                "detail value \(key) must use labelColor"
+            )
+        }
     }
 
     private static func expectFalse(_ actual: Bool, _ message: String) {

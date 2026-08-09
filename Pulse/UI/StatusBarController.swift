@@ -20,6 +20,7 @@ final class StatusBarController: NSObject {
     private var latestSnapshot: PulseSnapshot?
     private var lastRenderKey: StatusItemRenderKey?
     private var lastRenderedWidth: CGFloat?
+    private var memoryPressureSource: DispatchSourceProtocol?
 
     var onRefreshIntervalChanged: ((TimeInterval) -> Void)?
 
@@ -41,6 +42,7 @@ final class StatusBarController: NSObject {
         self.statusItemHost.onRenderEnvironmentChanged = { [weak self] in
             self?.renderLatestSnapshot(force: true)
         }
+        setupMemoryPressureResponder()
     }
 
     deinit {
@@ -104,6 +106,12 @@ final class StatusBarController: NSObject {
         }
     }
 
+    private var desiredPanelVisible = false
+    private var panelSessionIdentity: PanelSessionIdentity?
+
+    var desiredPanelVisibleForTesting: Bool { desiredPanelVisible }
+    var hasPanelSessionForTesting: Bool { panelSession != nil }
+
     func setRefreshInterval(_ interval: TimeInterval) {
         currentRefreshInterval = interval
     }
@@ -133,15 +141,43 @@ final class StatusBarController: NSObject {
     }
 
     @objc private func togglePanel(_ sender: Any) {
-        if let session = panelSession {
-            session.close()
+        requestPanelVisibility(!desiredPanelVisible, reason: .statusItemClick)
+    }
+
+    private func requestPanelVisibility(_ visible: Bool, reason: PanelDismissReason) {
+        desiredPanelVisible = visible
+        reconcilePanelPresentation(reason: reason)
+    }
+
+    private func reconcilePanelPresentation(reason: PanelDismissReason) {
+        if !desiredPanelVisible {
+            statusItemHost.setPanelPresented(false)
+            panelSession?.close()
             return
         }
 
+        let session = panelSession ?? makePanelSession()
+        guard session.show() else {
+            // 为什么：锚点尚不可用时不得留下幽灵 Session 或错误灰底。
+            desiredPanelVisible = false
+            statusItemHost.setPanelPresented(false)
+            panelSession = nil
+            panelSessionIdentity = nil
+            NSLog("Pulse 详情面板显示失败：状态栏锚点尚不可用")
+            return
+        }
+
+        statusItemHost.setPanelPresented(true)
+        if let latestSnapshot {
+            session.update(snapshot: latestSnapshot)
+        }
+    }
+
+    private func makePanelSession() -> PanelSessionControlling {
+        let identity = UUID()
         let configuration = PanelSessionConfiguration(
-            anchorButtonProvider: { [weak self] in
-                self?.statusItemHost.anchorButton
-            },
+            identity: identity,
+            anchorButtonProvider: { [weak self] in self?.statusItemHost.anchorButton },
             refreshInterval: currentRefreshInterval,
             thresholdConfig: thresholdConfig,
             launchAtLoginEnabled: launchController.isEnabled,
@@ -159,27 +195,50 @@ final class StatusBarController: NSObject {
             onLaunchAtLoginToggled: { [weak self] requestedState in
                 self?.handleLaunchAtLoginRequest(requestedState)
             },
-            onCheckForUpdates: {
+            onCheckForUpdates: { completion in
                 UpdateChecker.checkForUpdate { result in
-                    UpdateChecker.showUpdateAlert(result: result)
+                    completion(result)
                 }
             },
-            onQuit: {
+            onQuit: { [weak self] in
+                self?.requestPanelVisibility(false, reason: .quit)
                 NSApplication.shared.terminate(nil)
             },
-            onClose: { [weak self] in
-                // 为什么：面板关闭回调触发时恢复按钮非高亮状态，并将 session 强引用置空，完成 UI 资源完全释放。
-                self?.statusItemHost.isHighlighted = false
-                self?.panelSession = nil
+            onDismissRequested: { [weak self] reason in
+                self?.requestPanelVisibility(false, reason: reason)
+            },
+            onDidClose: { [weak self] closedIdentity in
+                guard let self,
+                      self.panelSessionIdentity == closedIdentity,
+                      !self.desiredPanelVisible else {
+                    return
+                }
+                // 为什么：关闭动画结束后保持 session 实例不销毁，复用 View 树与图形纹理，实现零堆泄露与 20MB 安定。
             }
         )
-
         let session = panelSessionFactory(configuration)
+        panelSessionIdentity = identity
         panelSession = session
-        statusItemHost.isHighlighted = true
-        session.show()
-        if let latestSnapshot {
-            session.update(snapshot: latestSnapshot)
+        return session
+    }
+
+    func handleMemoryPressureWarning() {
+        guard !desiredPanelVisible else { return }
+        destroyPanelSession()
+    }
+
+    private func destroyPanelSession() {
+        panelSession?.close()
+        panelSession = nil
+        panelSessionIdentity = nil
+    }
+
+    private func setupMemoryPressureResponder() {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak self] in
+            self?.handleMemoryPressureWarning()
         }
+        source.resume()
+        memoryPressureSource = source
     }
 }

@@ -1,8 +1,18 @@
 import AppKit
 import QuartzCore
 
+enum PanelDismissReason: Equatable {
+    case statusItemClick
+    case outsideClick
+    case applicationResignedActive
+    case quit
+}
+
+typealias PanelSessionIdentity = UUID
+
 /// 面板 Session 配置闭包与属性集合
 struct PanelSessionConfiguration {
+    let identity: PanelSessionIdentity
     let anchorButtonProvider: () -> NSStatusBarButton?
     let refreshInterval: TimeInterval
     let thresholdConfig: ThresholdConfig
@@ -10,15 +20,16 @@ struct PanelSessionConfiguration {
     let onRefreshIntervalChanged: (TimeInterval) -> Void
     let onThresholdConfigChanged: (ThresholdConfig) -> Void
     let onLaunchAtLoginToggled: (Bool) -> Void
-    let onCheckForUpdates: () -> Void
+    let onCheckForUpdates: (@escaping (UpdateChecker.UpdateResult) -> Void) -> Void
     let onQuit: () -> Void
-    let onClose: () -> Void
+    let onDismissRequested: (PanelDismissReason) -> Void
+    let onDidClose: (PanelSessionIdentity) -> Void
 }
 
 /// 详情面板 Session 接口
 protocol PanelSessionControlling: AnyObject {
     var isVisible: Bool { get }
-    func show()
+    @discardableResult func show() -> Bool
     func update(snapshot: PulseSnapshot)
     func setLaunchAtLoginEnabled(_ enabled: Bool)
     func close()
@@ -35,13 +46,14 @@ private final class StatusPanel: NSPanel {
 final class PanelSession: PanelSessionControlling {
 
     private static let panelWidth: CGFloat = 340
-    private static let collapsedHeight: CGFloat = 432
+    private static let collapsedHeight = PopoverContentView.collapsedHeight
 
     private let panel: StatusPanel
     private let contentView: PopoverContentView
     private let configuration: PanelSessionConfiguration
     private var globalClickMonitor: Any?
     private var localClickMonitor: Any?
+    private var transitionGeneration: UInt = 0
     private var isClosing = false
 
     var isVisible: Bool {
@@ -75,10 +87,13 @@ final class PanelSession: PanelSessionControlling {
         removeClickMonitors()
     }
 
-    func show() {
+    @discardableResult
+    func show() -> Bool {
         guard let button = configuration.anchorButtonProvider(),
               let buttonWindow = button.window,
-              let screen = buttonWindow.screen ?? NSScreen.main else { return }
+              let screen = buttonWindow.screen ?? NSScreen.main else {
+            return false
+        }
         let buttonRect = button.convert(button.bounds, to: nil)
         let screenRect = buttonWindow.convertToScreen(buttonRect)
 
@@ -93,8 +108,15 @@ final class PanelSession: PanelSessionControlling {
         let targetOrigin = NSPoint(x: x, y: y)
         let startOrigin = NSPoint(x: x, y: y + 4.0)
 
-        panel.alphaValue = 0.0
-        panel.setFrameOrigin(startOrigin)
+        // 为什么：新的显示意图必须使旧关闭动画的完成回调立即失效。
+        transitionGeneration &+= 1
+        isClosing = false
+        let wasVisible = panel.isVisible
+        if !wasVisible {
+            panel.alphaValue = 0.0
+            panel.setFrameOrigin(startOrigin)
+        }
+
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         addClickMonitors()
@@ -106,6 +128,7 @@ final class PanelSession: PanelSessionControlling {
             panel.animator().alphaValue = 1.0
             panel.animator().setFrameOrigin(targetOrigin)
         }
+        return true
     }
 
     func update(snapshot: PulseSnapshot) {
@@ -118,18 +141,28 @@ final class PanelSession: PanelSessionControlling {
 
     func close() {
         guard !isClosing else { return }
+        guard panel.isVisible else {
+            configuration.onDidClose(configuration.identity)
+            return
+        }
+        transitionGeneration &+= 1
+        let closingGeneration = transitionGeneration
         isClosing = true
-
         removeClickMonitors()
 
-        // 为什么：使用 0.12 秒淡出动画渐隐，动画完成后 orderOut 窗口并触发 onClose 回调销毁 session。
+        // 为什么：使用 0.12 秒淡出动画渐隐，动画完成后判断 generation 并释放 session。
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.12
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0.0
         }, completionHandler: { [weak self] in
-            self?.panel.orderOut(nil)
-            self?.configuration.onClose()
+            guard let self,
+                  self.isClosing,
+                  self.transitionGeneration == closingGeneration else {
+                return
+            }
+            self.panel.orderOut(nil)
+            self.configuration.onDidClose(self.configuration.identity)
         })
     }
 
@@ -175,7 +208,13 @@ final class PanelSession: PanelSessionControlling {
             self?.configuration.onQuit()
         }
         contentView.onCheckUpdate = { [weak self] in
-            self?.configuration.onCheckForUpdates()
+            guard let self else { return }
+            self.contentView.setUpdateChecking(true)
+            self.configuration.onCheckForUpdates { [weak self] result in
+                DispatchQueue.main.async {
+                    self?.contentView.setUpdateResult(result)
+                }
+            }
         }
         contentView.onPanelHeightChanged = { [weak self] newHeight in
             self?.updatePanelHeight(newHeight)
@@ -187,7 +226,11 @@ final class PanelSession: PanelSessionControlling {
         let delta = newHeight - frame.height
         frame.origin.y -= delta
         frame.size.height = newHeight
-        panel.setFrame(frame, display: true, animate: true)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().setFrame(frame, display: true)
+        }
     }
 
     static func shouldCloseForLocalClick(
@@ -205,10 +248,11 @@ final class PanelSession: PanelSessionControlling {
     }
 
     private func addClickMonitors() {
+        removeClickMonitors()
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in
-            self?.close()
+            self?.configuration.onDismissRequested(.outsideClick)
         }
         localClickMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
@@ -220,7 +264,7 @@ final class PanelSession: PanelSessionControlling {
                 panelWindow: self.panel,
                 anchorWindow: anchorWindow
             ) {
-                self.close()
+                self.configuration.onDismissRequested(.outsideClick)
             }
             return event
         }
@@ -249,7 +293,7 @@ final class PanelSession: PanelSessionControlling {
     }
 
     @objc private func applicationDidResignActive() {
-        close()
+        configuration.onDismissRequested(.applicationResignedActive)
     }
 
     private static func roundedRectMask(cornerRadius: CGFloat) -> NSImage {

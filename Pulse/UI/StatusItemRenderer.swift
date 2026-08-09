@@ -50,7 +50,7 @@ final class StatusItemRenderer: StatusItemRendering {
         let iconSlotWidth: CGFloat = 12.0
         let iconTextSpacing: CGFloat = 2.5
         let columnSpacing: CGFloat = 4.5
-        let rightInset: CGFloat = 9.0
+        let rightInset: CGFloat = 5.0
 
         let leftTextX = leftInset + iconSlotWidth + iconTextSpacing
         let leftColumnWidth = iconSlotWidth + iconTextSpacing + leftColumnTextWidth

@@ -42,6 +42,7 @@ enum UpdateChecker {
 
             let latestVersion = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
 
+            URLCache.shared.removeAllCachedResponses()
             DispatchQueue.main.async {
                 if isNewerVersion(latestVersion, than: currentVersion) {
                     completion(.updateAvailable(latestVersion))

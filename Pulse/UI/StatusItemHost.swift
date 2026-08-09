@@ -1,5 +1,35 @@
 import AppKit
 
+/// 把面板目标状态映射为按钮高亮时序，并拒绝过期的异步打开任务。
+final class StatusItemHighlightCoordinator {
+    typealias Scheduler = (@escaping () -> Void) -> Void
+
+    private let schedule: Scheduler
+    private let apply: (Bool) -> Void
+    private(set) var desiredPresented = false
+
+    init(schedule: @escaping Scheduler, apply: @escaping (Bool) -> Void) {
+        self.schedule = schedule
+        self.apply = apply
+    }
+
+    func setPanelPresented(_ presented: Bool) {
+        desiredPresented = presented
+
+        if !presented {
+            // 为什么：用户发出关闭意图后，菜单栏应立即恢复，不能等待面板动画结束。
+            apply(false)
+            return
+        }
+
+        // 为什么：等待当前 NSButton 鼠标跟踪完成，避免 AppKit 在 action 返回后覆盖持久高亮。
+        schedule { [weak self] in
+            guard let self, self.desiredPresented else { return }
+            self.apply(true)
+        }
+    }
+}
+
 /// 状态栏 host 接口，解耦生产环境 NSStatusItem 与测试假对象。
 protocol StatusItemHosting: AnyObject {
     var image: NSImage? { get set }
@@ -10,7 +40,7 @@ protocol StatusItemHosting: AnyObject {
     var anchorButton: NSStatusBarButton? { get }
     var onRenderEnvironmentChanged: (() -> Void)? { get set }
 
-    var isHighlighted: Bool { get set }
+    func setPanelPresented(_ presented: Bool)
     func configure(target: AnyObject, action: Selector, accessibilityLabel: String)
     func remove()
 }
@@ -39,14 +69,20 @@ final class SystemStatusItemHost: StatusItemHosting {
     }
 
     var effectiveAppearance: NSAppearance {
-        if let button = statusItem.button, button.window != nil {
-            let appearance = button.effectiveAppearance
-            // 为什么：若托管窗口的外观包含深色等特化外观则使用；
-            // 若启动初期由于窗口层级尚未完全关联到系统深色菜单栏宿主而回退为 aqua / vibrantLight，
-            // 显式保底为 darkAqua，确保 labelColor 在位图栅格化时绝对求值为白色，杜绝前 3 秒黑字。
-            if appearance.name != .aqua && appearance.name != .vibrantLight {
-                return appearance
-            }
+        let hostedAppearance = statusItem.button.flatMap { button in
+            button.window == nil ? nil : button.effectiveAppearance
+        }
+        return Self.resolvedEffectiveAppearance(hostedAppearance: hostedAppearance)
+    }
+
+    static func resolvedEffectiveAppearance(hostedAppearance: NSAppearance?) -> NSAppearance {
+        // 为什么：若托管窗口的外观包含深色等特化外观则使用；
+        // 若启动初期尚未关联窗口或回退为 aqua / vibrantLight，显式保底为 darkAqua，
+        // 确保 labelColor 在位图栅格化时绝对求值为白色，杜绝前 3 秒黑字。
+        if let hostedAppearance,
+           hostedAppearance.name != .aqua,
+           hostedAppearance.name != .vibrantLight {
+            return hostedAppearance
         }
         return NSAppearance(named: .darkAqua) ?? NSAppearance.currentDrawing()
     }
@@ -59,9 +95,15 @@ final class SystemStatusItemHost: StatusItemHosting {
         statusItem.button
     }
 
-    var isHighlighted: Bool {
-        get { statusItem.button?.isHighlighted ?? false }
-        set { statusItem.button?.highlight(newValue) }
+    private lazy var highlightCoordinator = StatusItemHighlightCoordinator(
+        schedule: { work in DispatchQueue.main.async(execute: work) },
+        apply: { [weak self] highlighted in
+            self?.statusItem.button?.highlight(highlighted)
+        }
+    )
+
+    func setPanelPresented(_ presented: Bool) {
+        highlightCoordinator.setPanelPresented(presented)
     }
 
     func configure(target: AnyObject, action: Selector, accessibilityLabel: String) {
@@ -85,6 +127,7 @@ final class SystemStatusItemHost: StatusItemHosting {
     }
 
     func remove() {
+        setPanelPresented(false)
         NotificationCenter.default.removeObserver(self, name: NSApplication.didChangeScreenParametersNotification, object: nil)
         // 为什么：显式从系统状态栏注销 statusItem，释放资源。
         NSStatusBar.system.removeStatusItem(statusItem)
@@ -104,7 +147,14 @@ final class FakeStatusItemHost: StatusItemHosting {
     var backingScaleFactor: CGFloat
     var anchorButton: NSStatusBarButton?
     var onRenderEnvironmentChanged: (() -> Void)?
-    var isHighlighted: Bool = false
+
+    private(set) var panelPresentationRequests: [Bool] = []
+    private(set) var isPanelPresented = false
+
+    func setPanelPresented(_ presented: Bool) {
+        panelPresentationRequests.append(presented)
+        isPanelPresented = presented
+    }
 
     init(
         isAttachedToWindow: Bool = true,

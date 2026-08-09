@@ -1,7 +1,20 @@
 import AppKit
 
+private final class MetricPairView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.controlBackgroundColor.withAlphaComponent(0.72).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 10, yRadius: 10).fill()
+
+        NSColor.separatorColor.withAlphaComponent(0.45).setFill()
+        NSRect(x: bounds.midX - 0.5, y: 8, width: 1, height: bounds.height - 16).fill()
+    }
+}
+
 /// macOS 系统设置式详情内容；控件只创建一次，刷新时仅更新既有标签。
 final class PopoverContentView: NSView {
+    private static let metricsHeight: CGFloat = 206
+    static let collapsedHeight: CGFloat = 8 + metricsHeight + 8 + 120 + 8 + 40 + 8
+
     var onRefreshIntervalChanged: ((TimeInterval) -> Void)?
     var onLaunchAtLoginToggled: ((Bool) -> Void)?
     var onQuit: (() -> Void)?
@@ -25,10 +38,14 @@ final class PopoverContentView: NSView {
         static let iconSlotWidth: CGFloat = 18
         static let titleX: CGFloat = 38
         static let trailingInset: CGFloat = 12
-        static let metricRowHeight: CGFloat = 40
+        static let metricGridInset: CGFloat = 8
+        static let metricRowGap: CGFloat = 8
+        static let metricCardHeight: CGFloat = 58
         static let controlRowHeight: CGFloat = 40
-        static let settingsRowHeight: CGFloat = 32
-        static let settingsInputRowHeight: CGFloat = 36
+        static let settingsRowHeight: CGFloat = 36
+        static let settingsThresholdRowHeight: CGFloat = 36
+        static let settingsInputWidth: CGFloat = 40
+        static let settingsUnitSlotWidth: CGFloat = 24
     }
 
     private let metricsGroup = NSBox()
@@ -42,9 +59,12 @@ final class PopoverContentView: NSView {
     private var valueLabels: [MetricKey: NSTextField] = [:]
 
     private var settingsExpanded = false
+    private var settingsHeightTracksBounds = false
     private let moreChevron = NSImageView()
     private var thresholdInputs: [(orange: NSTextField, red: NSTextField)] = []
     private var thresholdConfig: ThresholdConfig
+    private let updateSpinner = NSProgressIndicator()
+    private var isCheckingUpdate = false
 
     var onThresholdConfigChanged: ((ThresholdConfig) -> Void)?
 
@@ -63,21 +83,24 @@ final class PopoverContentView: NSView {
     override func layout() {
         super.layout()
         let contentWidth = bounds.width - Layout.outerInset * 2
-        let settingsHeight = settingsExpanded ? computeSettingsHeight() : 0
+        let settingsHeight = visibleSettingsHeight()
         let controlsHeight: CGFloat = 120 + settingsHeight
+        let metricsHeight = Self.metricsHeight
 
         // 从顶部向下定位：metricsGroup 始终紧贴顶部，展开时只有下方内容向下延伸
-        let metricsY = bounds.height - 8 - 240
+        let metricsY = bounds.height - 8 - metricsHeight
         let controlsY = metricsY - 8 - controlsHeight
         let quitY = controlsY - 8 - 40
 
-        metricsGroup.frame = NSRect(x: Layout.outerInset, y: metricsY, width: contentWidth, height: 240)
+        metricsGroup.frame = NSRect(x: Layout.outerInset, y: metricsY, width: contentWidth, height: metricsHeight)
         controlsGroup.frame = NSRect(x: Layout.outerInset, y: controlsY, width: contentWidth, height: controlsHeight)
         quitGroup.frame = NSRect(x: Layout.outerInset, y: quitY, width: contentWidth, height: 40)
 
         layoutMetricRows()
-        layoutControlRows()
-        if settingsExpanded { layoutSettingsRows() }
+        layoutControlRows(settingsVisible: settingsExpanded || settingsHeight > 0)
+        if settingsExpanded || settingsHeightTracksBounds {
+            layoutSettingsRows(visibleHeight: settingsHeight)
+        }
         layoutQuitRow()
     }
 
@@ -96,12 +119,8 @@ final class PopoverContentView: NSView {
             decimals: 1,
             suffix: "°C"
         )
-        let usedGB = snapshot.memory.usedBytes.map {
-            Double($0) / 1_073_741_824
-        }
-        let totalGB = snapshot.memory.totalBytes.map {
-            Double($0) / 1_073_741_824
-        }
+        let usedGB = snapshot.memory.usedBytes.map { Double($0) / 1_073_741_824 }
+        let totalGB = snapshot.memory.totalBytes.map { Double($0) / 1_073_741_824 }
         valueLabels[.memoryUsage]?.stringValue = MetricCalculations.formattedMemoryUsageDetail(
             usedGB: usedGB,
             totalGB: totalGB,
@@ -130,6 +149,9 @@ final class PopoverContentView: NSView {
         configureGroup(metricsGroup)
         configureGroup(controlsGroup)
         configureGroup(quitGroup)
+        // 为什么：折叠动画会把设置行逐步移出内容区，必须裁剪，避免漏绘到下方退出卡片。
+        controlsGroup.contentView?.wantsLayer = true
+        controlsGroup.contentView?.layer?.masksToBounds = true
         metricsGroup.identifier = NSUserInterfaceItemIdentifier("group.metrics")
         controlsGroup.identifier = NSUserInterfaceItemIdentifier("group.controls")
         quitGroup.identifier = NSUserInterfaceItemIdentifier("group.quit")
@@ -144,7 +166,6 @@ final class PopoverContentView: NSView {
 
     private func configureGroup(_ box: NSBox) {
         box.boxType = .custom
-        // 系统设置分组依靠材质层级而不是硬描边，避免再次出现“框中框”。
         box.borderWidth = 0
         box.cornerRadius = Layout.groupCornerRadius
         box.fillColor = NSColor.labelColor.withAlphaComponent(0.045)
@@ -152,24 +173,25 @@ final class PopoverContentView: NSView {
     }
 
     private func buildMetricRows() {
+        guard let contentView = metricsGroup.contentView else { return }
+        for index in 0..<3 {
+            let pair = MetricPairView()
+            pair.identifier = NSUserInterfaceItemIdentifier("metric.pair.\(index)")
+            contentView.addSubview(pair)
+        }
+
         let definitions: [(MetricKey, String, String)] = [
             (.power, "bolt.fill", "系统负载"),
-            (.temperature, "thermometer.medium", "电池温度"),
+            (.cpu, "cpu", "CPU 使用"),
             (.memoryUsage, "memorychip", "内存使用"),
             (.memoryPressure, "gauge.with.dots.needle.33percent", "内存压力"),
-            (.cpu, "cpu", "CPU 使用"),
+            (.temperature, "thermometer.medium", "电池温度"),
             (.powerSource, "powerplug.fill", "电源状态"),
         ]
         for (key, symbol, title) in definitions {
-            metricsGroup.contentView?.addSubview(
+            contentView.addSubview(
                 makeMetricRow(symbol: symbol, title: title, key: key)
             )
-        }
-        for _ in 0..<5 {
-            let separator = NSBox()
-            separator.boxType = .separator
-            separator.identifier = NSUserInterfaceItemIdentifier("metric.separator")
-            metricsGroup.contentView?.addSubview(separator)
         }
     }
 
@@ -185,18 +207,21 @@ final class PopoverContentView: NSView {
         icon.image = NSImage(
             systemSymbolName: symbol,
             accessibilityDescription: title
-        )?.withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
-        icon.contentTintColor = .labelColor
+        )?.withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
+        icon.contentTintColor = .secondaryLabelColor
         icon.identifier = NSUserInterfaceItemIdentifier("metric.\(key.rawValue).icon")
 
         let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = .systemFont(ofSize: 13)
+        titleLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        titleLabel.textColor = .secondaryLabelColor
         titleLabel.identifier = NSUserInterfaceItemIdentifier("metric.\(key.rawValue).title")
 
         let valueLabel = NSTextField(labelWithString: "—")
-        valueLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
-        valueLabel.alignment = .right
+        valueLabel.font = metricValueFont(for: key)
+        valueLabel.textColor = .labelColor
+        valueLabel.alignment = .left
         valueLabel.lineBreakMode = .byClipping
+        valueLabel.allowsDefaultTighteningForTruncation = true
         valueLabel.identifier = NSUserInterfaceItemIdentifier("metric.\(key.rawValue).value")
         valueLabels[key] = valueLabel
 
@@ -204,6 +229,74 @@ final class PopoverContentView: NSView {
         row.addSubview(titleLabel)
         row.addSubview(valueLabel)
         return row
+    }
+
+    private func layoutMetricRows() {
+        guard let contentView = metricsGroup.contentView else { return }
+        let rows = contentView.subviews.filter {
+            $0.identifier?.rawValue.hasSuffix(".row") == true
+        }
+        let pairs = contentView.subviews.filter {
+            $0.identifier?.rawValue.hasPrefix("metric.pair.") == true
+        }
+        let pairWidth = contentView.bounds.width - Layout.metricGridInset * 2
+        let cardWidth = pairWidth / 2
+
+        for (index, pair) in pairs.enumerated() {
+            let y = contentView.bounds.height
+                - Layout.metricGridInset
+                - CGFloat(index + 1) * Layout.metricCardHeight
+                - CGFloat(index) * Layout.metricRowGap
+            pair.frame = NSRect(
+                x: Layout.metricGridInset,
+                y: y,
+                width: pairWidth,
+                height: Layout.metricCardHeight
+            )
+        }
+
+        for (index, row) in rows.enumerated() {
+            let gridRow = index / 2
+            let gridColumn = index % 2
+            let x = Layout.metricGridInset
+                + CGFloat(gridColumn) * cardWidth
+            let y = contentView.bounds.height
+                - Layout.metricGridInset
+                - CGFloat(gridRow + 1) * Layout.metricCardHeight
+                - CGFloat(gridRow) * Layout.metricRowGap
+            row.frame = NSRect(
+                x: x,
+                y: y,
+                width: cardWidth,
+                height: Layout.metricCardHeight
+            )
+            layoutMetricCardSubviews(row)
+        }
+    }
+
+    private func metricValueFont(for key: MetricKey) -> NSFont {
+        let pointSize: CGFloat
+        switch key {
+        case .memoryUsage:
+            pointSize = 10.5
+        case .cpu:
+            pointSize = 13
+        case .powerSource:
+            pointSize = 11
+        case .power, .temperature, .memoryPressure:
+            pointSize = 16
+        }
+        return .monospacedDigitSystemFont(ofSize: pointSize, weight: .semibold)
+    }
+
+    private func layoutMetricCardSubviews(_ card: NSView) {
+        guard card.subviews.count >= 3 else { return }
+        let icon = card.subviews[0]
+        let title = card.subviews[1]
+        let value = card.subviews[2]
+        icon.frame = NSRect(x: 10, y: 34, width: 16, height: 16)
+        title.frame = NSRect(x: 32, y: 33, width: card.bounds.width - 42, height: 17)
+        value.frame = NSRect(x: 10, y: 8, width: card.bounds.width - 20, height: 20)
     }
 
     private func buildControlRows() {
@@ -314,29 +407,7 @@ final class PopoverContentView: NSView {
         quitGroup.contentView?.addSubview(quitButton)
     }
 
-    private func layoutMetricRows() {
-        let rows = metricsGroup.contentView?.subviews.filter {
-            $0.identifier?.rawValue.hasSuffix(".row") == true
-        } ?? []
-        for (index, row) in rows.enumerated() {
-            let y = metricsGroup.bounds.height - CGFloat(index + 1) * Layout.metricRowHeight
-            row.frame = NSRect(
-                x: 0,
-                y: y,
-                width: metricsGroup.bounds.width,
-                height: Layout.metricRowHeight
-            )
-            layoutStandardRowSubviews(row, trailingWidth: metricsGroup.bounds.width - 137)
-        }
 
-        let separators = metricsGroup.contentView?.subviews.filter {
-            $0.identifier?.rawValue == "metric.separator"
-        } ?? []
-        for (index, separator) in separators.enumerated() {
-            let y = metricsGroup.bounds.height - CGFloat(index + 1) * Layout.metricRowHeight
-            layoutSeparator(separator, y: y, width: metricsGroup.bounds.width)
-        }
-    }
 
 
 
@@ -413,6 +484,8 @@ final class PopoverContentView: NSView {
         if !settingsExpanded {
             ensureSettingsRowsBuilt()
         }
+        // 为什么：只有真实面板会通过回调逐帧改变 bounds；独立视图继续使用确定性的即时布局。
+        settingsHeightTracksBounds = onPanelHeightChanged != nil
         settingsExpanded.toggle()
         let symbolName = settingsExpanded ? "chevron.up" : "chevron.down"
         moreChevron.image = NSImage(
@@ -424,6 +497,8 @@ final class PopoverContentView: NSView {
     }
 
     @objc private func checkUpdateTapped(_ sender: Any) {
+        guard !isCheckingUpdate else { return }
+        setUpdateChecking(true)
         onCheckUpdate?()
     }
 
@@ -500,34 +575,134 @@ final class PopoverContentView: NSView {
         memNote.addSubview(memLabel)
         controlsGroup.contentView?.addSubview(memNote)
 
-        // 检查更新按钮
+        // 检查更新与版本号底栏
         let updateRow = NSView()
         updateRow.identifier = NSUserInterfaceItemIdentifier("settings.update.row")
-        let updateIcon = NSImageView()
-        updateIcon.image = NSImage(
-            systemSymbolName: "arrow.triangle.2.circlepath",
-            accessibilityDescription: "检查更新"
-        )?.withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
-        updateIcon.contentTintColor = .labelColor
-        let updateLabel = NSTextField(labelWithString: "检查更新")
-        updateLabel.font = .systemFont(ofSize: 13)
-        let updateButton = NSButton()
-        updateButton.title = ""
-        updateButton.isBordered = false
-        updateButton.focusRingType = .none
-        updateButton.target = self
-        updateButton.action = #selector(checkUpdateTapped(_:))
-        updateRow.addSubview(updateIcon)
-        updateRow.addSubview(updateLabel)
+
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+        let versionLabel = NSTextField(labelWithString: "Pulse v\(version)")
+        versionLabel.identifier = NSUserInterfaceItemIdentifier("settings.version.label")
+        versionLabel.font = .systemFont(ofSize: 12)
+        versionLabel.textColor = .secondaryLabelColor
+
+        let updateButton = NSButton(title: "检查更新", target: self, action: #selector(checkUpdateTapped(_:)))
+        updateButton.identifier = NSUserInterfaceItemIdentifier("settings.update.button")
+        updateButton.bezelStyle = .rounded
+        updateButton.controlSize = .small
+        updateButton.font = .systemFont(ofSize: 11)
+
+        updateSpinner.style = .spinning
+        updateSpinner.controlSize = .small
+        updateSpinner.sizeToFit()
+        updateSpinner.isHidden = true
+
+        updateRow.addSubview(versionLabel)
         updateRow.addSubview(updateButton)
+        updateRow.addSubview(updateSpinner)
         controlsGroup.contentView?.addSubview(updateRow)
 
-        // 分隔线
-        for i in 0..<3 {
+        // 分隔线（0~2 对应 3 个 thresholdSection 底部，3 对应 memNote 底部与 updateRow 上方）
+        for i in 0..<4 {
             let sep = NSBox()
             sep.boxType = .separator
             sep.identifier = NSUserInterfaceItemIdentifier("settings.separator.\(i)")
             controlsGroup.contentView?.addSubview(sep)
+        }
+    }
+
+    private let upToDateLabel = NSTextField(labelWithString: "✅ 已是最新版本")
+    private let updateAvailableLabel = NSTextField(labelWithString: "")
+    private let downloadButton = NSButton()
+
+    func setUpdateChecking(_ checking: Bool) {
+        isCheckingUpdate = checking
+        let updateRow = controlsGroup.contentView?.subviews.first(where: { $0.identifier?.rawValue == "settings.update.row" })
+        if let updateButton = updateRow?.subviews.first(where: { $0.identifier?.rawValue == "settings.update.button" }) as? NSButton {
+            updateButton.title = checking ? "正在检查..." : "检查更新"
+            updateButton.isEnabled = !checking
+        }
+        if checking {
+            updateSpinner.startAnimation(nil)
+            updateSpinner.isHidden = false
+        } else {
+            updateSpinner.stopAnimation(nil)
+            updateSpinner.isHidden = true
+        }
+    }
+
+    func setUpdateResult(_ result: UpdateChecker.UpdateResult) {
+        setUpdateChecking(false)
+        let updateRow = controlsGroup.contentView?.subviews.first(where: { $0.identifier?.rawValue == "settings.update.row" })
+        guard let updateRow else { return }
+
+        upToDateLabel.removeFromSuperview()
+        updateAvailableLabel.removeFromSuperview()
+        downloadButton.removeFromSuperview()
+
+        switch result {
+        case .upToDate:
+            upToDateLabel.stringValue = "✅ 已是最新版本"
+            upToDateLabel.textColor = .systemGreen
+            upToDateLabel.font = .systemFont(ofSize: 11, weight: .medium)
+            upToDateLabel.identifier = NSUserInterfaceItemIdentifier("update.state.upToDate")
+            upToDateLabel.frame = NSRect(x: updateRow.bounds.width - 120, y: 9, width: 110, height: 18)
+            updateRow.addSubview(upToDateLabel)
+
+            if let updateButton = updateRow.subviews.first(where: { $0.identifier?.rawValue == "settings.update.button" }) {
+                updateButton.isHidden = true
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self, weak updateRow] in
+                guard let self, let updateRow else { return }
+                self.upToDateLabel.removeFromSuperview()
+                if let updateButton = updateRow.subviews.first(where: { $0.identifier?.rawValue == "settings.update.button" }) {
+                    updateButton.isHidden = false
+                }
+            }
+
+        case .updateAvailable(let version):
+            updateAvailableLabel.stringValue = "🎉 发现 v\(version)"
+            updateAvailableLabel.textColor = .systemOrange
+            updateAvailableLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+            updateAvailableLabel.identifier = NSUserInterfaceItemIdentifier("update.state.available")
+            updateAvailableLabel.frame = NSRect(x: updateRow.bounds.width - 180, y: 9, width: 90, height: 18)
+            updateRow.addSubview(updateAvailableLabel)
+
+            downloadButton.title = "前往下载"
+            downloadButton.bezelStyle = .inline
+            downloadButton.controlSize = .small
+            downloadButton.font = .systemFont(ofSize: 11, weight: .medium)
+            downloadButton.identifier = NSUserInterfaceItemIdentifier("update.state.downloadButton")
+            downloadButton.frame = NSRect(x: updateRow.bounds.width - 85, y: 8, width: 75, height: 20)
+            downloadButton.target = self
+            downloadButton.action = #selector(openReleasePage)
+            updateRow.addSubview(downloadButton)
+
+            if let updateButton = updateRow.subviews.first(where: { $0.identifier?.rawValue == "settings.update.button" }) {
+                updateButton.isHidden = true
+            }
+
+        case .error(let msg):
+            upToDateLabel.stringValue = "⚠️ \(msg)"
+            upToDateLabel.textColor = .systemRed
+            upToDateLabel.font = .systemFont(ofSize: 11)
+            upToDateLabel.identifier = NSUserInterfaceItemIdentifier("update.state.error")
+            upToDateLabel.frame = NSRect(x: updateRow.bounds.width - 150, y: 9, width: 140, height: 18)
+            updateRow.addSubview(upToDateLabel)
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self, weak updateRow] in
+                guard let self, let updateRow else { return }
+                self.upToDateLabel.removeFromSuperview()
+                if let updateButton = updateRow.subviews.first(where: { $0.identifier?.rawValue == "settings.update.button" }) {
+                    updateButton.isHidden = false
+                }
+            }
+        }
+    }
+
+    @objc private func openReleasePage() {
+        if let url = URL(string: "https://github.com/lin-colin/Pulse/releases/latest") {
+            NSWorkspace.shared.open(url)
         }
     }
 
@@ -610,92 +785,94 @@ final class PopoverContentView: NSView {
 
     // MARK: - Settings Layout
 
-    private func layoutSettingsRows() {
-        guard settingsExpanded, let contentView = controlsGroup.contentView else { return }
+    private func layoutSettingsRows(visibleHeight: CGFloat) {
+        guard let contentView = controlsGroup.contentView else { return }
         let w = controlsGroup.bounds.width
         let settingsHeight = computeSettingsHeight()
-        let sectionHeight = Layout.settingsRowHeight + Layout.settingsInputRowHeight
+        // 为什么：设置内容保持完整几何并随可见高度整体下移，避免在收起途中侵入上方三个固定控制行。
+        let yOffset = visibleHeight - settingsHeight
+        let sectionHeight = Layout.settingsThresholdRowHeight
         let sections = contentView.subviews.filter { $0.identifier?.rawValue.hasPrefix("settings.section.") == true }
 
         for (i, section) in sections.enumerated() {
-            let y = settingsHeight - 24 - CGFloat(i + 1) * sectionHeight
+            let y = settingsHeight - 24 - CGFloat(i + 1) * sectionHeight + yOffset
             section.frame = NSRect(x: 0, y: y, width: w, height: sectionHeight)
-            section.isHidden = false
             layoutThresholdSection(section)
         }
 
-        // 分隔线
+        // 4 条 100% 等距分隔线（y = 144, 108, 72, 36）
         let separators = contentView.subviews.filter { $0.identifier?.rawValue.hasPrefix("settings.separator.") == true }
         for (i, sep) in separators.enumerated() {
-            let y = settingsHeight - 24 - CGFloat(i + 1) * sectionHeight
+            let y = settingsHeight - 24 - CGFloat(i + 1) * sectionHeight + yOffset
             layoutSeparator(sep, y: y, width: w)
-            sep.isHidden = false
         }
 
         // 设置说明文字
         if let descLabel = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.desc" }) {
-            let descY = settingsHeight - 24
+            let descY = settingsHeight - 24 + yOffset
             descLabel.frame = NSRect(x: Layout.rowLeadingInset, y: descY, width: w - Layout.rowLeadingInset * 2, height: 16)
-            descLabel.isHidden = false
         }
 
-        // 内存说明
+        // 行 4：内存说明（统一 36pt 行高，居中置于 36pt 分隔线与 72pt 分隔线正中央）
         if let memNote = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.memNote" }) {
-            let memY = settingsHeight - 24 - CGFloat(sections.count) * sectionHeight - 24
-            memNote.frame = NSRect(x: Layout.rowLeadingInset, y: memY, width: w - Layout.rowLeadingInset * 2, height: 16)
-            memNote.isHidden = false
+            let memY: CGFloat = 36.0 + yOffset
+            memNote.frame = NSRect(x: Layout.rowLeadingInset, y: memY, width: w - Layout.rowLeadingInset * 2, height: sectionHeight)
             
             if memNote.subviews.count >= 2 {
-                memNote.subviews[0].frame = NSRect(x: 0, y: 2, width: 14, height: 14) // icon
-                memNote.subviews[1].frame = NSRect(x: 20, y: 0, width: memNote.bounds.width - 20, height: 16) // label
+                memNote.subviews[0].frame = NSRect(x: 0, y: 11, width: 14, height: 14) // icon 垂直绝对居中
+                memNote.subviews[1].frame = NSRect(x: 26, y: 10, width: memNote.bounds.width - 26, height: 16) // label 全局 x=38 贯穿对齐
             }
         }
 
-        // 检查更新行
+        // 行 5：检查更新与版本号底栏（统一 36pt 行高）
         if let updateRow = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.update.row" }) {
-            updateRow.frame = NSRect(x: 0, y: 0, width: w, height: Layout.controlRowHeight)
+            updateRow.frame = NSRect(x: 0, y: yOffset, width: w, height: sectionHeight)
+            let buttonW: CGFloat = 78
+            let buttonX = w - Layout.trailingInset - buttonW
+
             if updateRow.subviews.count >= 3 {
-                updateRow.subviews[0].frame = NSRect(x: Layout.rowLeadingInset, y: 10, width: Layout.iconSlotWidth, height: Layout.iconSlotWidth)
-                updateRow.subviews[1].frame = NSRect(x: Layout.titleX, y: 11, width: 120, height: 18)
-                updateRow.subviews[2].frame = updateRow.bounds
+                let versionLabel = updateRow.subviews[0]
+                let updateButton = updateRow.subviews[1]
+                let spinner = updateRow.subviews[2]
+
+                versionLabel.frame = NSRect(x: Layout.titleX, y: 9, width: 120, height: 18)
+                updateButton.frame = NSRect(x: buttonX, y: 8, width: buttonW, height: 20)
+                spinner.frame = NSRect(x: buttonX - 22, y: 10, width: 16, height: 16)
             }
-            updateRow.isHidden = false
         }
     }
 
     private func layoutThresholdSection(_ section: NSView) {
         guard section.subviews.count >= 8 else { return }
-        let w = section.bounds.width
-        let topY = Layout.settingsInputRowHeight
         let icon = section.subviews[0]
         let title = section.subviews[1]
-        icon.frame = NSRect(x: Layout.rowLeadingInset, y: topY + 7, width: 16, height: 16)
-        title.frame = NSRect(x: Layout.titleX, y: topY + 6, width: 80, height: 18)
+        // 1pt 光学对齐微调：图标向上抬 1pt，标题向下沉 1pt，基线与中心相接
+        icon.frame = NSRect(x: Layout.rowLeadingInset, y: 10, width: 16, height: 16)
+        title.frame = NSRect(x: Layout.titleX, y: 8, width: 68, height: 18)
 
-        let inputY: CGFloat = 6
-        let inputW: CGFloat = 48
-        let labelW: CGFloat = 28
-        let unitW: CGFloat = 22
-        let leftX = Layout.rowLeadingInset + 4
+        let labelW: CGFloat = 26
+        let inputW: CGFloat = Layout.settingsInputWidth
+        let unitW: CGFloat = Layout.settingsUnitSlotWidth
+
         let orangeLabel = section.subviews[2]
         let orangeInput = section.subviews[3]
         let orangeUnit = section.subviews[4]
-        orangeLabel.frame = NSRect(x: leftX, y: inputY + 2, width: labelW, height: 16)
-        orangeInput.frame = NSRect(x: leftX + labelW + 4, y: inputY, width: inputW, height: 22)
-        orangeUnit.frame = NSRect(x: leftX + labelW + inputW + 8, y: inputY + 2, width: unitW, height: 16)
+        // 1pt 光学对齐微调：标签与单位下沉 1pt，文字基线与输入框数字平齐
+        orangeLabel.frame = NSRect(x: 110, y: 9, width: labelW, height: 16)
+        orangeInput.frame = NSRect(x: 138, y: 7, width: inputW, height: 22)
+        orangeUnit.frame = NSRect(x: 180, y: 9, width: unitW, height: 16)
 
-        let rightX = w / 2 + 8
         let redLabel = section.subviews[5]
         let redInput = section.subviews[6]
         let redUnit = section.subviews[7]
-        redLabel.frame = NSRect(x: rightX, y: inputY + 2, width: labelW, height: 16)
-        redInput.frame = NSRect(x: rightX + labelW + 4, y: inputY, width: inputW, height: 22)
-        redUnit.frame = NSRect(x: rightX + labelW + inputW + 8, y: inputY + 2, width: unitW, height: 16)
+        redLabel.frame = NSRect(x: 208, y: 9, width: labelW, height: 16)
+        redInput.frame = NSRect(x: 236, y: 7, width: inputW, height: 22)
+        redUnit.frame = NSRect(x: 278, y: 9, width: unitW, height: 16)
     }
 
     // MARK: - Control Rows Layout (updated for 3 rows)
 
-    private func layoutControlRows() {
+    private func layoutControlRows(settingsVisible: Bool) {
         guard let contentView = controlsGroup.contentView else { return }
         let h = controlsGroup.bounds.height
         let w = controlsGroup.bounds.width
@@ -745,27 +922,36 @@ final class PopoverContentView: NSView {
             layoutSeparator(sep, y: y, width: w)
         }
 
-        // Hide/show settings elements based on expanded state
+        // 折叠途中设置区仍需参与同一帧布局，到可见高度归零后才隐藏。
         let settingsViews = contentView.subviews.filter {
             let id = $0.identifier?.rawValue ?? ""
             return id.hasPrefix("settings.")
         }
         for v in settingsViews {
-            v.isHidden = !settingsExpanded
+            v.isHidden = !settingsVisible
         }
     }
 
     // MARK: - Height Calculation
 
     private func computeSettingsHeight() -> CGFloat {
-        let sectionHeight = Layout.settingsRowHeight + Layout.settingsInputRowHeight
-        return sectionHeight * 3 + 48 + Layout.controlRowHeight // 3 sections + desc + mem note + update row
+        let sectionHeight = Layout.settingsThresholdRowHeight
+        return sectionHeight * 5 + 24 // 5 rows * 36pt + 24pt desc = 204pt
+    }
+
+    private func visibleSettingsHeight() -> CGFloat {
+        guard settingsHeightTracksBounds else {
+            return settingsExpanded ? computeSettingsHeight() : 0
+        }
+        return min(
+            computeSettingsHeight(),
+            max(0, bounds.height - Self.collapsedHeight)
+        )
     }
 
     func computeTotalHeight() -> CGFloat {
         let settingsHeight = settingsExpanded ? computeSettingsHeight() : 0
-        let controlsHeight: CGFloat = 120 + settingsHeight
-        return 8 + 240 + 8 + controlsHeight + 8 + 40 + 8
+        return Self.collapsedHeight + settingsHeight
     }
 }
 
