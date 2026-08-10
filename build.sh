@@ -41,6 +41,7 @@ swiftc \
     "$SOURCE_DIR/UI/StatusBarController.swift" \
     "$SOURCE_DIR/UI/StatusItemRenderer.swift" \
     "$SOURCE_DIR/UI/RefreshIntervalControl.swift" \
+    "$SOURCE_DIR/UI/ThresholdValueField.swift" \
     "$SOURCE_DIR/UI/PopoverContentView.swift" \
     "$SOURCE_DIR/UI/PanelSession.swift" \
     "$SOURCE_DIR/Services/SMCReader.swift" \

@@ -42,10 +42,11 @@ final class PopoverContentView: NSView {
         static let metricRowGap: CGFloat = 8
         static let metricCardHeight: CGFloat = 58
         static let controlRowHeight: CGFloat = 40
-        static let settingsRowHeight: CGFloat = 36
-        static let settingsThresholdRowHeight: CGFloat = 36
-        static let settingsInputWidth: CGFloat = 40
-        static let settingsUnitSlotWidth: CGFloat = 24
+        static let settingsHeaderHeight: CGFloat = 24
+        static let settingsThresholdRowHeight: CGFloat = 32
+        static let settingsMemoryNoteHeight: CGFloat = 32
+        static let settingsUpdateRowHeight: CGFloat = 36
+        static let settingsFieldSize = NSSize(width: 64, height: 24)
     }
 
     private let metricsGroup = NSBox()
@@ -61,7 +62,7 @@ final class PopoverContentView: NSView {
     private var settingsExpanded = false
     private var settingsHeightTracksBounds = false
     private let moreChevron = NSImageView()
-    private var thresholdInputs: [(orange: NSTextField, red: NSTextField)] = []
+    private var thresholdInputs: [(orange: NumericInputView, red: NumericInputView)] = []
     private var thresholdConfig: ThresholdConfig
     private let updateSpinner = NSProgressIndicator()
     private var isCheckingUpdate = false
@@ -483,6 +484,8 @@ final class PopoverContentView: NSView {
     @objc private func toggleSettings(_ sender: Any) {
         if !settingsExpanded {
             ensureSettingsRowsBuilt()
+        } else {
+            window?.makeFirstResponder(nil)
         }
         // 为什么：只有真实面板会通过回调逐帧改变 bounds；独立视图继续使用确定性的即时布局。
         settingsHeightTracksBounds = onPanelHeightChanged != nil
@@ -502,7 +505,7 @@ final class PopoverContentView: NSView {
         onCheckUpdate?()
     }
 
-    @objc private func thresholdValueChanged(_ sender: NSTextField) {
+    private func thresholdValueChanged() {
         guard thresholdInputs.count >= 3 else { return }
 
         let powerOrangeStr = thresholdInputs[0].orange.stringValue
@@ -536,41 +539,52 @@ final class PopoverContentView: NSView {
     // MARK: - Settings Panel
 
     private func buildSettingsRows() {
-        let definitions: [(String, String, Double, Double, String)] = [
-            ("bolt.fill", "系统负载", thresholdConfig.power.orange, thresholdConfig.power.red, "W"),
-            ("thermometer.medium", "电池温度", thresholdConfig.temperature.orange, thresholdConfig.temperature.red, "°C"),
-            ("cpu", "CPU 使用", thresholdConfig.cpu.orange, thresholdConfig.cpu.red, "%"),
+        let thresholdHeader = makeThresholdHeader()
+        controlsGroup.contentView?.addSubview(thresholdHeader)
+
+        let definitions: [(String, String, Double, Double, String, String)] = [
+            ("bolt.fill", "系统负载", thresholdConfig.power.orange, thresholdConfig.power.red, "W", "瓦"),
+            ("thermometer.medium", "电池温度", thresholdConfig.temperature.orange, thresholdConfig.temperature.red, "°C", "摄氏度"),
+            ("cpu", "CPU 使用", thresholdConfig.cpu.orange, thresholdConfig.cpu.red, "%", "百分比"),
         ]
 
         for (index, def) in definitions.enumerated() {
-            let (symbol, title, orangeVal, redVal, unit) = def
+            let (symbol, title, orangeVal, redVal, unit, spokenUnit) = def
             let section = makeThresholdSection(
                 symbol: symbol, title: title,
                 orangeValue: orangeVal, redValue: redVal,
-                unit: unit, index: index
+                unit: unit, spokenUnit: spokenUnit, index: index
             )
             controlsGroup.contentView?.addSubview(section)
         }
 
-        // 设置说明
-        let descLabel = NSTextField(labelWithString: "数值超过阈值时，菜单栏指标颜色会变化")
-        descLabel.font = .systemFont(ofSize: 11)
-        descLabel.textColor = .tertiaryLabelColor
-        descLabel.identifier = NSUserInterfaceItemIdentifier("settings.desc")
-        controlsGroup.contentView?.addSubview(descLabel)
+        let orderedInputs = thresholdInputs.flatMap { [$0.orange, $0.red] }
+        for (current, next) in zip(orderedInputs, orderedInputs.dropFirst()) {
+            current.nextKeyView = next
+        }
+        orderedInputs.last?.nextKeyView = orderedInputs.first
 
         // 内存压力说明
         let memNote = NSView()
         memNote.identifier = NSUserInterfaceItemIdentifier("settings.memNote")
-        
+
+        let memoryBackground = NSBox()
+        memoryBackground.boxType = .custom
+        memoryBackground.borderWidth = 0
+        memoryBackground.fillColor = NSColor.systemBlue.withAlphaComponent(0.05)
+        memoryBackground.identifier = NSUserInterfaceItemIdentifier("settings.memNote.background")
+
         let memIcon = NSImageView()
         memIcon.image = NSImage(systemSymbolName: "gauge.with.dots.needle.33percent", accessibilityDescription: nil)
         memIcon.contentTintColor = .secondaryLabelColor
-        
-        let memLabel = NSTextField(labelWithString: "内存压力由 macOS 系统内核决定，不可配置")
+        memIcon.identifier = NSUserInterfaceItemIdentifier("settings.memNote.icon")
+
+        let memLabel = NSTextField(labelWithString: "内存压力由 macOS 系统管理，无需设置阈值")
         memLabel.font = .systemFont(ofSize: 11)
         memLabel.textColor = .secondaryLabelColor
-        
+        memLabel.identifier = NSUserInterfaceItemIdentifier("settings.memNote.label")
+
+        memNote.addSubview(memoryBackground)
         memNote.addSubview(memIcon)
         memNote.addSubview(memLabel)
         controlsGroup.contentView?.addSubview(memNote)
@@ -596,18 +610,66 @@ final class PopoverContentView: NSView {
         updateSpinner.sizeToFit()
         updateSpinner.isHidden = true
 
+        let updateIcon = NSImageView()
+        updateIcon.image = NSImage(
+            systemSymbolName: "arrow.triangle.2.circlepath",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
+        updateIcon.contentTintColor = .secondaryLabelColor
+        updateIcon.identifier = NSUserInterfaceItemIdentifier("settings.update.icon")
+
+        updateRow.addSubview(updateIcon)
         updateRow.addSubview(versionLabel)
         updateRow.addSubview(updateButton)
         updateRow.addSubview(updateSpinner)
         controlsGroup.contentView?.addSubview(updateRow)
 
-        // 分隔线（0~2 对应 3 个 thresholdSection 底部，3 对应 memNote 底部与 updateRow 上方）
-        for i in 0..<4 {
+        // 分隔线（5 条分隔线）
+        for i in 0..<5 {
             let sep = NSBox()
             sep.boxType = .separator
             sep.identifier = NSUserInterfaceItemIdentifier("settings.separator.\(i)")
             controlsGroup.contentView?.addSubview(sep)
         }
+    }
+
+    private func makeThresholdHeader() -> NSView {
+        let header = NSView()
+        header.identifier = NSUserInterfaceItemIdentifier("settings.threshold.header")
+
+        let title = NSTextField(labelWithString: "告警阈值")
+        title.identifier = NSUserInterfaceItemIdentifier("settings.threshold.header.title")
+        title.font = .systemFont(ofSize: 10, weight: .medium)
+        title.textColor = .labelColor
+
+        // 为什么用 NSAttributedString 而不是单独的 NSBox 圆点：
+        // 将圆点字符 ● 与文字放在同一个 NSTextField 中，
+        // 共享同一 baseline，天然垂直居中对齐，无需手动调 y 值。
+        let orangeLabel = NSTextField(labelWithAttributedString: Self.makeHeaderDotText(dot: .systemOrange, text: "提醒"))
+        orangeLabel.identifier = NSUserInterfaceItemIdentifier("settings.threshold.header.orangeLabel")
+
+        let redLabel = NSTextField(labelWithAttributedString: Self.makeHeaderDotText(dot: .systemRed, text: "严重"))
+        redLabel.identifier = NSUserInterfaceItemIdentifier("settings.threshold.header.redLabel")
+
+        [title, orangeLabel, redLabel].forEach(header.addSubview)
+        return header
+    }
+
+    private static func makeHeaderDotText(dot color: NSColor, text: String) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        // 用较小字号的圆点字符，使其视觉大小接近原始 6×6 圆点
+        let dotAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 8),
+            .foregroundColor: color,
+            .baselineOffset: 1.0
+        ]
+        result.append(NSAttributedString(string: "\u{25CF} ", attributes: dotAttrs))
+        let textAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10),
+            .foregroundColor: NSColor.secondaryLabelColor
+        ]
+        result.append(NSAttributedString(string: text, attributes: textAttrs))
+        return result
     }
 
     private let upToDateLabel = NSTextField(labelWithString: "✅ 已是最新版本")
@@ -709,12 +771,11 @@ final class PopoverContentView: NSView {
     private func makeThresholdSection(
         symbol: String, title: String,
         orangeValue: Double, redValue: Double,
-        unit: String, index: Int
+        unit: String, spokenUnit: String, index: Int
     ) -> NSView {
         let section = NSView()
         section.identifier = NSUserInterfaceItemIdentifier("settings.section.\(index)")
 
-        // 标题行
         let icon = NSImageView()
         icon.image = NSImage(
             systemSymbolName: symbol,
@@ -725,57 +786,28 @@ final class PopoverContentView: NSView {
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
 
-        // 输入行
-        let orangeLabel = NSTextField(labelWithString: "变橙")
-        orangeLabel.font = .systemFont(ofSize: 11)
-        orangeLabel.textColor = .systemOrange
+        let orangeField = ThresholdValueField(unit: unit)
+        orangeField.identifier = NSUserInterfaceItemIdentifier("settings.section.\(index).orangeField")
+        orangeField.inputView.identifier = NSUserInterfaceItemIdentifier("settings.section.\(index).orangeInput")
+        orangeField.inputView.stringValue = formatThreshold(orangeValue)
+        orangeField.inputView.setAccessibilityLabel("\(title)提醒阈值，单位\(spokenUnit)")
+        orangeField.inputView.onCommit = { [weak self] in self?.thresholdValueChanged() }
+        orangeField.inputView.onTextChange = { [weak self] in self?.thresholdValueChanged() }
 
-        let orangeInput = NSTextField()
-        orangeInput.identifier = NSUserInterfaceItemIdentifier("settings.section.\(index).orangeInput")
-        orangeInput.stringValue = formatThreshold(orangeValue)
-        orangeInput.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-        orangeInput.alignment = .center
-        orangeInput.focusRingType = .none
-        orangeInput.isBordered = true
-        orangeInput.bezelStyle = .roundedBezel
-        orangeInput.target = self
-        orangeInput.action = #selector(thresholdValueChanged(_:))
-        orangeInput.delegate = self
-
-        let orangeUnit = NSTextField(labelWithString: unit)
-        orangeUnit.font = .systemFont(ofSize: 11)
-        orangeUnit.textColor = .secondaryLabelColor
-
-        let redLabel = NSTextField(labelWithString: "变红")
-        redLabel.font = .systemFont(ofSize: 11)
-        redLabel.textColor = .systemRed
-
-        let redInput = NSTextField()
-        redInput.identifier = NSUserInterfaceItemIdentifier("settings.section.\(index).redInput")
-        redInput.stringValue = formatThreshold(redValue)
-        redInput.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-        redInput.alignment = .center
-        redInput.focusRingType = .none
-        redInput.isBordered = true
-        redInput.bezelStyle = .roundedBezel
-        redInput.target = self
-        redInput.action = #selector(thresholdValueChanged(_:))
-        redInput.delegate = self
-
-        let redUnit = NSTextField(labelWithString: unit)
-        redUnit.font = .systemFont(ofSize: 11)
-        redUnit.textColor = .secondaryLabelColor
+        let redField = ThresholdValueField(unit: unit)
+        redField.identifier = NSUserInterfaceItemIdentifier("settings.section.\(index).redField")
+        redField.inputView.identifier = NSUserInterfaceItemIdentifier("settings.section.\(index).redInput")
+        redField.inputView.stringValue = formatThreshold(redValue)
+        redField.inputView.setAccessibilityLabel("\(title)严重阈值，单位\(spokenUnit)")
+        redField.inputView.onCommit = { [weak self] in self?.thresholdValueChanged() }
+        redField.inputView.onTextChange = { [weak self] in self?.thresholdValueChanged() }
 
         section.addSubview(icon)
         section.addSubview(titleLabel)
-        section.addSubview(orangeLabel)
-        section.addSubview(orangeInput)
-        section.addSubview(orangeUnit)
-        section.addSubview(redLabel)
-        section.addSubview(redInput)
-        section.addSubview(redUnit)
+        section.addSubview(orangeField)
+        section.addSubview(redField)
 
-        thresholdInputs.append((orange: orangeInput, red: redInput))
+        thresholdInputs.append((orange: orangeField.inputView, red: redField.inputView))
         return section
     }
 
@@ -791,83 +823,103 @@ final class PopoverContentView: NSView {
         let settingsHeight = computeSettingsHeight()
         // 为什么：设置内容保持完整几何并随可见高度整体下移，避免在收起途中侵入上方三个固定控制行。
         let yOffset = visibleHeight - settingsHeight
-        let sectionHeight = Layout.settingsThresholdRowHeight
-        let sections = contentView.subviews.filter { $0.identifier?.rawValue.hasPrefix("settings.section.") == true }
+
+        if let header = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.threshold.header" }) {
+            header.frame = NSRect(x: 0, y: 164 + yOffset, width: w, height: Layout.settingsHeaderHeight)
+            layoutThresholdHeader(header)
+        }
+
+        let sectionYPositions: [CGFloat] = [132, 100, 68]
+        let sections = contentView.subviews.filter {
+            guard let id = $0.identifier?.rawValue else { return false }
+            return id.hasPrefix("settings.section.") && id.split(separator: ".").count == 3
+        }
 
         for (i, section) in sections.enumerated() {
-            let y = settingsHeight - 24 - CGFloat(i + 1) * sectionHeight + yOffset
-            section.frame = NSRect(x: 0, y: y, width: w, height: sectionHeight)
+            guard i < sectionYPositions.count else { break }
+            let y = sectionYPositions[i] + yOffset
+            section.frame = NSRect(x: 0, y: y, width: w, height: Layout.settingsThresholdRowHeight)
             layoutThresholdSection(section)
         }
 
-        // 4 条 100% 等距分隔线（y = 144, 108, 72, 36）
+        let separatorYPositions: [CGFloat] = [164, 132, 100, 68, 36]
         let separators = contentView.subviews.filter { $0.identifier?.rawValue.hasPrefix("settings.separator.") == true }
         for (i, sep) in separators.enumerated() {
-            let y = settingsHeight - 24 - CGFloat(i + 1) * sectionHeight + yOffset
+            guard i < separatorYPositions.count else { break }
+            let y = separatorYPositions[i] + yOffset
             layoutSeparator(sep, y: y, width: w)
         }
 
-        // 设置说明文字
-        if let descLabel = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.desc" }) {
-            let descY = settingsHeight - 24 + yOffset
-            descLabel.frame = NSRect(x: Layout.rowLeadingInset, y: descY, width: w - Layout.rowLeadingInset * 2, height: 16)
-        }
-
-        // 行 4：内存说明（统一 36pt 行高，居中置于 36pt 分隔线与 72pt 分隔线正中央）
         if let memNote = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.memNote" }) {
-            let memY: CGFloat = 36.0 + yOffset
-            memNote.frame = NSRect(x: Layout.rowLeadingInset, y: memY, width: w - Layout.rowLeadingInset * 2, height: sectionHeight)
-            
-            if memNote.subviews.count >= 2 {
-                memNote.subviews[0].frame = NSRect(x: 0, y: 11, width: 14, height: 14) // icon 垂直绝对居中
-                memNote.subviews[1].frame = NSRect(x: 26, y: 10, width: memNote.bounds.width - 26, height: 16) // label 全局 x=38 贯穿对齐
-            }
+            memNote.frame = NSRect(x: 0, y: 36 + yOffset, width: w, height: Layout.settingsMemoryNoteHeight)
+            layoutMemoryNote(memNote)
         }
 
-        // 行 5：检查更新与版本号底栏（统一 36pt 行高）
         if let updateRow = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.update.row" }) {
-            updateRow.frame = NSRect(x: 0, y: yOffset, width: w, height: sectionHeight)
-            let buttonW: CGFloat = 78
-            let buttonX = w - Layout.trailingInset - buttonW
+            updateRow.frame = NSRect(x: 0, y: yOffset, width: w, height: Layout.settingsUpdateRowHeight)
+            layoutUpdateRow(updateRow)
+        }
+    }
 
-            if updateRow.subviews.count >= 3 {
-                let versionLabel = updateRow.subviews[0]
-                let updateButton = updateRow.subviews[1]
-                let spinner = updateRow.subviews[2]
-
-                versionLabel.frame = NSRect(x: Layout.titleX, y: 9, width: 120, height: 18)
-                updateButton.frame = NSRect(x: buttonX, y: 8, width: buttonW, height: 20)
-                spinner.frame = NSRect(x: buttonX - 22, y: 10, width: 16, height: 16)
-            }
+    private func layoutThresholdHeader(_ header: NSView) {
+        if let title = header.subviews.first(where: { $0.identifier?.rawValue == "settings.threshold.header.title" }) {
+            title.frame = NSRect(x: Layout.titleX, y: 3, width: 88, height: 18)
+        }
+        // “● 提醒” 居中对齐到 orangeField 列（midX=178）
+        if let orangeLabel = header.subviews.first(where: { $0.identifier?.rawValue == "settings.threshold.header.orangeLabel" }) as? NSTextField {
+            orangeLabel.sizeToFit()
+            let labelW = ceil(orangeLabel.frame.width)
+            orangeLabel.frame = NSRect(x: 178 - labelW / 2, y: 3, width: labelW, height: 18)
+        }
+        // “● 严重” 居中对齐到 redField 列（midX=258）
+        if let redLabel = header.subviews.first(where: { $0.identifier?.rawValue == "settings.threshold.header.redLabel" }) as? NSTextField {
+            redLabel.sizeToFit()
+            let labelW = ceil(redLabel.frame.width)
+            redLabel.frame = NSRect(x: 258 - labelW / 2, y: 3, width: labelW, height: 18)
         }
     }
 
     private func layoutThresholdSection(_ section: NSView) {
-        guard section.subviews.count >= 8 else { return }
+        guard section.subviews.count >= 4 else { return }
         let icon = section.subviews[0]
         let title = section.subviews[1]
-        // 1pt 光学对齐微调：图标向上抬 1pt，标题向下沉 1pt，基线与中心相接
-        icon.frame = NSRect(x: Layout.rowLeadingInset, y: 10, width: 16, height: 16)
-        title.frame = NSRect(x: Layout.titleX, y: 8, width: 68, height: 18)
+        let orangeField = section.subviews[2]
+        let redField = section.subviews[3]
 
-        let labelW: CGFloat = 26
-        let inputW: CGFloat = Layout.settingsInputWidth
-        let unitW: CGFloat = Layout.settingsUnitSlotWidth
+        icon.frame = NSRect(x: 12, y: 8, width: 16, height: 16)
+        title.frame = NSRect(x: 38, y: 7, width: 88, height: 18)
+        orangeField.frame = NSRect(x: 146, y: 4, width: Layout.settingsFieldSize.width, height: Layout.settingsFieldSize.height)
+        redField.frame = NSRect(x: 226, y: 4, width: Layout.settingsFieldSize.width, height: Layout.settingsFieldSize.height)
+    }
 
-        let orangeLabel = section.subviews[2]
-        let orangeInput = section.subviews[3]
-        let orangeUnit = section.subviews[4]
-        // 1pt 光学对齐微调：标签与单位下沉 1pt，文字基线与输入框数字平齐
-        orangeLabel.frame = NSRect(x: 110, y: 9, width: labelW, height: 16)
-        orangeInput.frame = NSRect(x: 138, y: 7, width: inputW, height: 22)
-        orangeUnit.frame = NSRect(x: 180, y: 9, width: unitW, height: 16)
+    private func layoutMemoryNote(_ memNote: NSView) {
+        let w = memNote.bounds.width
+        if let bg = memNote.subviews.first(where: { $0.identifier?.rawValue == "settings.memNote.background" }) {
+            bg.frame = memNote.bounds
+        }
+        if let icon = memNote.subviews.first(where: { $0.identifier?.rawValue == "settings.memNote.icon" }) {
+            icon.frame = NSRect(x: 12, y: 8, width: 16, height: 16)
+        }
+        if let label = memNote.subviews.first(where: { $0.identifier?.rawValue == "settings.memNote.label" }) {
+            label.frame = NSRect(x: 38, y: 7, width: max(0, w - 50), height: 18)
+        }
+    }
 
-        let redLabel = section.subviews[5]
-        let redInput = section.subviews[6]
-        let redUnit = section.subviews[7]
-        redLabel.frame = NSRect(x: 208, y: 9, width: labelW, height: 16)
-        redInput.frame = NSRect(x: 236, y: 7, width: inputW, height: 22)
-        redUnit.frame = NSRect(x: 278, y: 9, width: unitW, height: 16)
+    private func layoutUpdateRow(_ updateRow: NSView) {
+        let w = updateRow.bounds.width
+        let buttonW: CGFloat = 78
+        let buttonX = w - Layout.trailingInset - buttonW
+
+        if let icon = updateRow.subviews.first(where: { $0.identifier?.rawValue == "settings.update.icon" }) {
+            icon.frame = NSRect(x: 12, y: 11.5, width: 16, height: 16)
+        }
+        if let versionLabel = updateRow.subviews.first(where: { $0.identifier?.rawValue == "settings.version.label" }) {
+            versionLabel.frame = NSRect(x: 38, y: 9, width: 120, height: 18)
+        }
+        if let updateButton = updateRow.subviews.first(where: { $0.identifier?.rawValue == "settings.update.button" }) {
+            updateButton.frame = NSRect(x: buttonX, y: 8, width: buttonW, height: 20)
+        }
+        updateSpinner.frame = NSRect(x: buttonX - 22, y: 10, width: 16, height: 16)
     }
 
     // MARK: - Control Rows Layout (updated for 3 rows)
@@ -935,8 +987,10 @@ final class PopoverContentView: NSView {
     // MARK: - Height Calculation
 
     private func computeSettingsHeight() -> CGFloat {
-        let sectionHeight = Layout.settingsThresholdRowHeight
-        return sectionHeight * 5 + 24 // 5 rows * 36pt + 24pt desc = 204pt
+        Layout.settingsHeaderHeight
+            + Layout.settingsThresholdRowHeight * 3
+            + Layout.settingsMemoryNoteHeight
+            + Layout.settingsUpdateRowHeight
     }
 
     private func visibleSettingsHeight() -> CGFloat {
@@ -955,11 +1009,3 @@ final class PopoverContentView: NSView {
     }
 }
 
-// MARK: - NSTextFieldDelegate
-extension PopoverContentView: NSTextFieldDelegate {
-    func controlTextDidChange(_ obj: Notification) {
-        if let textField = obj.object as? NSTextField {
-            thresholdValueChanged(textField)
-        }
-    }
-}

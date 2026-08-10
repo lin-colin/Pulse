@@ -33,6 +33,7 @@ swiftc \
     "$PROJECT_DIR/Pulse/UI/StatusItemHost.swift" \
     "$PROJECT_DIR/Pulse/UI/StatusItemRenderer.swift" \
     "$PROJECT_DIR/Pulse/UI/RefreshIntervalControl.swift" \
+    "$PROJECT_DIR/Pulse/UI/ThresholdValueField.swift" \
     "$PROJECT_DIR/Pulse/UI/PopoverContentView.swift" \
     "$PROJECT_DIR/Pulse/UI/PanelSession.swift" \
     "$PROJECT_DIR/Pulse/UI/StatusBarController.swift" \

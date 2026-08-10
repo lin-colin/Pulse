@@ -25,6 +25,8 @@ test_bin
 .superpowers/
 antigravity/
 docs/superpowers/
+.build/
+.codegraph/
 
 # Source image files (icns is kept)
 Pulse/Resources/*.png

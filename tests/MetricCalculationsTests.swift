@@ -126,8 +126,12 @@ struct MetricCalculationsTests {
         testStatusBarControllerIgnoresStaleSessionCompletion()
         // 为什么：状态栏图标左右内边距必须保持 5.0 pt 100% 对称，消除右侧过宽留白。
         testStatusItemRendererLeftAndRightInsetsAreSymmetrical()
-        // 为什么：更多设置中所有 3 个指标配置行必须共享相同的单行高 36pt 与绝对统一的控件 X 轴坐标对齐。
-        testPopoverSettingsRowsShareUnifiedSingleRowGeometry()
+        // 为什么：更多设置必须收拢为 188pt 矩阵结构，包含 1 个 Header、3 个指标配置行、1 个内存说明行与 1 个更新行。
+        testPopoverThresholdMatrixStructure()
+        // 为什么：更多设置必须遵循精确的 188pt 几何布局与绝对位置。
+        testPopoverThresholdMatrixGeometry()
+        // 为什么：所有 6 个阈值输入框必须具备完整的 Accessibility 语义标签与 Matrix Tab Order 链条。
+        testPopoverThresholdMatrixAccessibilityAndKeyboardOrder()
         // 为什么：配置行必须进行 1pt 光学基线平齐微调，底部分割线必须隔离配置区，检查更新具备 Loading 状态。
         testPopoverOpticalAlignmentAndUpdateLoadingState()
         // 为什么：面板 Session 必须在多次 toggle 循环中被常驻复用，封顶内存占用，消除对象频繁销毁与重复创建开销。
@@ -2056,7 +2060,8 @@ struct MetricCalculationsTests {
         }
 
         let expandedSections = allDescendants(in: view).filter {
-            $0.identifier?.rawValue.hasPrefix("settings.section.") == true && !($0 is NSTextField)
+            guard let id = $0.identifier?.rawValue else { return false }
+            return id.hasPrefix("settings.section.") && id.split(separator: ".").count == 3
         }
         expectEqual(Double(expandedSections.count), 3, "expanding must create exactly three settings sections")
 
@@ -2067,7 +2072,8 @@ struct MetricCalculationsTests {
         }
 
         let reexpandedSections = allDescendants(in: view).filter {
-            $0.identifier?.rawValue.hasPrefix("settings.section.") == true && !($0 is NSTextField)
+            guard let id = $0.identifier?.rawValue else { return false }
+            return id.hasPrefix("settings.section.") && id.split(separator: ".").count == 3
         }
         expectEqual(Double(reexpandedSections.count), 3, "re-expanding must reuse created settings sections")
     }
@@ -2087,8 +2093,8 @@ struct MetricCalculationsTests {
         }
 
         NSApp.sendAction(action, to: target, from: moreButton)
-        expectEqual(Double(requestedHeight ?? -1), 602.0, "expansion must request the full panel height")
-        view.frame.size.height = 602
+        expectEqual(Double(requestedHeight ?? -1), 586.0, "expansion must request the full panel height")
+        view.frame.size.height = 586
         view.layoutSubtreeIfNeeded()
 
         NSApp.sendAction(action, to: target, from: moreButton)
@@ -2099,19 +2105,19 @@ struct MetricCalculationsTests {
         let updateRow: NSView? = descendant(in: view, identifier: "settings.update.row")
         expectEqual(
             Double(controlsGroup?.frame.height ?? -1),
-            324.0,
+            308.0,
             "controls card must remain expanded before the outer frame starts shrinking"
         )
         expectFalse(updateRow?.isHidden ?? true, "settings must remain visible at the start of collapse")
 
-        view.frame.size.height = 500
+        view.frame.size.height = 492
         view.layoutSubtreeIfNeeded()
 
         let quitGroup: NSView? = descendant(in: view, identifier: "group.quit")
-        let descriptionLabel: NSView? = descendant(in: view, identifier: "settings.desc")
+        let header: NSView? = descendant(in: view, identifier: "settings.threshold.header")
         expectEqual(
             Double(controlsGroup?.frame.height ?? -1),
-            222.0,
+            214.0,
             "controls card must use the panel's intermediate height"
         )
         expectTrue(
@@ -2121,7 +2127,7 @@ struct MetricCalculationsTests {
         expectEqual(Double(quitGroup?.frame.minY ?? -1), 8.0, "quit card must follow the outer bottom edge")
         expectFalse(updateRow?.isHidden ?? true, "settings must stay visible while part of the settings region remains")
         expectTrue(
-            (descriptionLabel?.frame.maxY ?? .greatestFiniteMagnitude) <= 102.0,
+            (header?.frame.maxY ?? .greatestFiniteMagnitude) <= 94.0,
             "settings content must stay below the three fixed control rows during collapse"
         )
 
@@ -2557,87 +2563,178 @@ struct MetricCalculationsTests {
         expectTrue(abs(rightMargin - 5.0) < 0.2, "status item right inset must be approximately 5.0 pt (symmetrical with left inset)")
     }
 
-    private static func testPopoverSettingsRowsShareUnifiedSingleRowGeometry() {
-        let view = PopoverContentView(frame: NSRect(x: 0, y: 0, width: 340, height: 320))
+    private static func testPopoverThresholdMatrixStructure() {
+        let view = PopoverContentView(
+            frame: NSRect(x: 0, y: 0, width: 340, height: PopoverContentView.collapsedHeight)
+        )
         let moreButton: NSButton? = descendant(in: view, identifier: "control.more.button")
         if let moreButton, let action = moreButton.action, let target = moreButton.target {
             NSApp.sendAction(action, to: target, from: moreButton)
         }
+        view.frame.size.height = view.computeTotalHeight()
         view.layoutSubtreeIfNeeded()
 
-        let sections = allDescendants(in: view).filter { v in
-            guard let id = v.identifier?.rawValue else { return false }
-            return id.hasPrefix("settings.section.") && v.subviews.count >= 8
-        }
-        expectEqual(Double(sections.count), 3, "there must be exactly three settings metric threshold sections")
+        let header: NSView? = descendant(in: view, identifier: "settings.threshold.header")
+        expectTrue(header != nil, "threshold matrix must expose one semantic header")
 
-        let heights = sections.map(\.frame.height)
-        expectTrue(heights.allSatisfy { $0 == 36.0 }, "all 3 settings sections must share the unified single-row height of 36pt")
+        let sections = allDescendants(in: view).filter {
+            guard let id = $0.identifier?.rawValue else { return false }
+            return id.hasPrefix("settings.section.") && id.split(separator: ".").count == 3
+        }
+        expectEqual(Double(sections.count), 3, "threshold matrix must contain exactly three metric rows")
 
-        let orangeInputXs = sections.compactMap { sec -> CGFloat? in
-            sec.subviews.first(where: { $0.identifier?.rawValue.hasSuffix(".orangeInput") == true })?.frame.minX
+        let fieldContainers = allDescendants(in: view).filter {
+            let id = $0.identifier?.rawValue ?? ""
+            return id.hasSuffix(".orangeField") || id.hasSuffix(".redField")
         }
-        let redInputXs = sections.compactMap { sec -> CGFloat? in
-            sec.subviews.first(where: { $0.identifier?.rawValue.hasSuffix(".redInput") == true })?.frame.minX
+        expectEqual(Double(fieldContainers.count), 6, "each threshold must use one value-plus-unit field")
+
+        let inputs = allDescendants(in: view).compactMap { $0 as? NSTextField }.filter {
+            let id = $0.identifier?.rawValue ?? ""
+            return id.hasSuffix(".orangeInput") || id.hasSuffix(".redInput")
         }
-        expectTrue(Set(orangeInputXs.map { Int($0.rounded()) }).count == 1, "all orange inputs across sections must share the exact same X coordinate")
-        expectTrue(Set(redInputXs.map { Int($0.rounded()) }).count == 1, "all red inputs across sections must share the exact same X coordinate")
+        expectEqual(Double(inputs.count), 6, "all six numeric inputs must remain available")
+
+        let visibleText = allDescendants(in: view).compactMap { ($0 as? NSTextField)?.stringValue }
+        expectFalse(visibleText.contains("变橙"), "matrix must remove repeated orange labels")
+        expectFalse(visibleText.contains("变红"), "matrix must remove repeated red labels")
+        expectTrue(visibleText.contains("告警阈值"), "matrix header must name the edited values")
+        expectTrue(visibleText.contains("提醒"), "matrix header must name the reminder column")
+        expectTrue(visibleText.contains("严重"), "matrix header must name the critical column")
+        expectTrue(
+            visibleText.contains("内存压力由 macOS 系统管理，无需设置阈值"),
+            "memory pressure must be concise non-editable information"
+        )
+        let updateRow: NSView? = descendant(in: view, identifier: "settings.update.row")
+        expectTrue(updateRow != nil, "version and update controls must remain in the footer")
+    }
+
+    private static func testPopoverThresholdMatrixGeometry() {
+        let view = PopoverContentView(frame: NSRect(x: 0, y: 0, width: 340, height: 398))
+        let moreButton: NSButton? = descendant(in: view, identifier: "control.more.button")
+        if let moreButton, let action = moreButton.action, let target = moreButton.target {
+            NSApp.sendAction(action, to: target, from: moreButton)
+        }
+        expectEqual(Double(view.computeTotalHeight() - 398), 188.0, "settings contribution must be 188pt")
+        view.frame.size.height = view.computeTotalHeight()
+        view.layoutSubtreeIfNeeded()
+
+        let header: NSView? = descendant(in: view, identifier: "settings.threshold.header")
+        let memoryNote: NSView? = descendant(in: view, identifier: "settings.memNote")
+        let updateRow: NSView? = descendant(in: view, identifier: "settings.update.row")
+        expectEqual(Double(header?.frame.minY ?? -1), 164.0, "header Y must be 164pt")
+        expectEqual(Double(header?.frame.height ?? -1), 24.0, "header height must be 24pt")
+        expectEqual(Double(memoryNote?.frame.minY ?? -1), 36.0, "memory note Y must be 36pt")
+        expectEqual(Double(memoryNote?.frame.height ?? -1), 32.0, "memory note height must be 32pt")
+        expectEqual(Double(updateRow?.frame.minY ?? -1), 0.0, "update row Y must be 0pt")
+        expectEqual(Double(updateRow?.frame.height ?? -1), 36.0, "update row height must be 36pt")
+
+        for (index, expectedY) in [132.0, 100.0, 68.0].enumerated() {
+            let section: NSView? = descendant(in: view, identifier: "settings.section.\(index)")
+            let orangeField: NSView? = descendant(in: view, identifier: "settings.section.\(index).orangeField")
+            let redField: NSView? = descendant(in: view, identifier: "settings.section.\(index).redField")
+            expectEqual(Double(section?.frame.minY ?? -1), expectedY, "threshold row Y must match order")
+            expectEqual(Double(section?.frame.height ?? -1), 32.0, "threshold row height must be 32pt")
+            expectEqual(Double(orangeField?.frame.minX ?? -1), 146.0, "reminder field X must be 146pt")
+            expectEqual(Double(redField?.frame.minX ?? -1), 226.0, "critical field X must be 226pt")
+            expectEqual(Double(orangeField?.frame.width ?? -1), 64.0, "reminder field width must be 64pt")
+            expectEqual(Double(redField?.frame.width ?? -1), 64.0, "critical field width must be 64pt")
+            expectEqual(Double(orangeField?.frame.height ?? -1), 24.0, "reminder field height must be 24pt")
+            expectEqual(Double(redField?.frame.height ?? -1), 24.0, "critical field height must be 24pt")
+        }
+    }
+
+    private static func testPopoverThresholdMatrixAccessibilityAndKeyboardOrder() {
+        let view = PopoverContentView(frame: NSRect(x: 0, y: 0, width: 340, height: 398))
+        let moreButton: NSButton? = descendant(in: view, identifier: "control.more.button")
+        if let moreButton, let action = moreButton.action, let target = moreButton.target {
+            NSApp.sendAction(action, to: target, from: moreButton)
+        }
+
+        let ids = [
+            "settings.section.0.orangeInput", "settings.section.0.redInput",
+            "settings.section.1.orangeInput", "settings.section.1.redInput",
+            "settings.section.2.orangeInput", "settings.section.2.redInput",
+        ]
+        let inputs: [NSTextField] = ids.compactMap { descendant(in: view, identifier: $0) }
+        expectEqual(Double(inputs.count), 6, "all threshold inputs must be keyboard reachable")
+
+        let expectedLabels = [
+            "系统负载提醒阈值，单位瓦", "系统负载严重阈值，单位瓦",
+            "电池温度提醒阈值，单位摄氏度", "电池温度严重阈值，单位摄氏度",
+            "CPU 使用提醒阈值，单位百分比", "CPU 使用严重阈值，单位百分比",
+        ]
+        for (input, expectedLabel) in zip(inputs, expectedLabels) {
+            expectEqual(input.accessibilityLabel() ?? "", expectedLabel, "input semantics must be complete")
+        }
+        for index in 0..<(inputs.count - 1) {
+            expectTrue(inputs[index].nextKeyView === inputs[index + 1], "Tab order must follow matrix order")
+        }
+        expectTrue(inputs.last?.nextKeyView === inputs.first, "Tab order must loop from last field back to first field")
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 586),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = view
+        view.frame.size.height = view.computeTotalHeight()
+        view.layoutSubtreeIfNeeded()
+
+        window.makeFirstResponder(inputs[0])
+        expectTrue(window.firstResponder === inputs[0] || window.fieldEditor(false, for: inputs[0]) === window.firstResponder, "field 0 must accept focus")
+
+        window.makeFirstResponder(inputs[1])
+        expectTrue(window.firstResponder === inputs[1] || window.fieldEditor(false, for: inputs[1]) === window.firstResponder, "field 1 must accept focus")
+
+        window.makeFirstResponder(nil)
+        expectTrue(window.firstResponder === window, "focus must clear cleanly when requested")
+
+        let firstFieldContainer: NSView? = descendant(in: view, identifier: "settings.section.0.orangeField")
+        firstFieldContainer?.mouseDown(with: NSEvent())
+        expectTrue(window.firstResponder === inputs[0] || window.fieldEditor(false, for: inputs[0]) === window.firstResponder, "clicking anywhere on card container must focus numeric input")
     }
 
     private static func testPopoverOpticalAlignmentAndUpdateLoadingState() {
-        let view = PopoverContentView(frame: NSRect(x: 0, y: 0, width: 340, height: 320))
+        let view = PopoverContentView(frame: NSRect(x: 0, y: 0, width: 340, height: 398))
         let moreButton: NSButton? = descendant(in: view, identifier: "control.more.button")
         if let moreButton, let action = moreButton.action, let target = moreButton.target {
             NSApp.sendAction(action, to: target, from: moreButton)
         }
+        view.frame.size.height = view.computeTotalHeight()
         view.layoutSubtreeIfNeeded()
-
-        let firstSection: NSView? = descendant(in: view, identifier: "settings.section.0")
-        expectTrue(firstSection != nil, "first section should exist")
-        if let sec = firstSection, sec.subviews.count >= 8 {
-            let iconY = sec.subviews[0].frame.minY
-            let titleY = sec.subviews[1].frame.minY
-            let labelY = sec.subviews[2].frame.minY
-            let unitY = sec.subviews[4].frame.minY
-            expectEqual(Double(iconY), 10.0, "section icon Y must be optically raised to 10pt")
-            expectEqual(Double(titleY), 8.0, "section title Y must be optically lowered to 8pt")
-            expectEqual(Double(labelY), 9.0, "section orange label Y must be optically lowered to 9pt")
-            expectEqual(Double(unitY), 9.0, "section orange unit Y must be optically lowered to 9pt")
-        }
 
         let separators = allDescendants(in: view).filter {
             $0.identifier?.rawValue.hasPrefix("settings.separator.") == true
         }
-        expectEqual(Double(separators.count), 4, "there must be exactly 4 settings separators including the bottom divider")
+        expectEqual(Double(separators.count), 5, "there must be exactly 5 settings separators")
 
         let separatorXs = separators.map(\.frame.minX)
-        let separatorWidths = separators.map(\.frame.width)
-        expectTrue(separatorXs.allSatisfy { $0 == 38.0 }, "all 4 settings separators must share the exact same X coordinate of 38pt")
-        expectTrue(Set(separatorWidths.map { Int($0.rounded()) }).count == 1, "all 4 settings separators must share the exact same width")
+        expectTrue(separatorXs.allSatisfy { $0 == 38.0 }, "all 5 settings separators must share the exact same X coordinate of 38pt")
 
         let separatorYs = separators.map(\.frame.minY).sorted(by: >)
-        expectEqual(Double(separatorYs.count), 4, "4 separators count")
-        if separatorYs.count == 4 {
-            expectEqual(Double(separatorYs[0]), 144.0, "separator 0 Y must be 144pt")
-            expectEqual(Double(separatorYs[1]), 108.0, "separator 1 Y must be 108pt")
-            expectEqual(Double(separatorYs[2]), 72.0, "separator 2 Y must be 72pt")
-            expectEqual(Double(separatorYs[3]), 36.0, "separator 3 Y must be 36pt")
+        expectEqual(Double(separatorYs.count), 5, "5 separators count")
+        if separatorYs.count == 5 {
+            expectEqual(Double(separatorYs[0]), 164.0, "separator 0 Y must be 164pt")
+            expectEqual(Double(separatorYs[1]), 132.0, "separator 1 Y must be 132pt")
+            expectEqual(Double(separatorYs[2]), 100.0, "separator 2 Y must be 100pt")
+            expectEqual(Double(separatorYs[3]), 68.0, "separator 3 Y must be 68pt")
+            expectEqual(Double(separatorYs[4]), 36.0, "separator 4 Y must be 36pt")
         }
 
         let memNote: NSView? = descendant(in: view, identifier: "settings.memNote")
         expectTrue(memNote != nil, "settings memNote should exist")
         if let memNote {
-            expectEqual(Double(memNote.frame.height), 36.0, "memNote row height must be unified to 36pt")
-            if memNote.subviews.count >= 2 {
-                let memLabel = memNote.subviews[1]
-                expectEqual(Double(memLabel.frame.minX), 26.0, "memLabel relative X must be 26pt to align with 38pt baseline")
-            }
+            expectEqual(Double(memNote.frame.height), 32.0, "memNote row height must be 32pt")
+            let memLabel: NSView? = descendant(in: memNote, identifier: "settings.memNote.label")
+            expectEqual(Double(memLabel?.frame.minX ?? -1), 38.0, "memLabel X must align with 38pt baseline")
         }
 
         let updateRow: NSView? = descendant(in: view, identifier: "settings.update.row")
         expectTrue(updateRow != nil, "settings update row should exist")
         if let updateRow {
-            expectEqual(Double(updateRow.frame.height), 36.0, "update row height must be unified to 36pt")
+            expectEqual(Double(updateRow.frame.height), 36.0, "update row height must be 36pt")
         }
 
         let versionLabel: NSTextField? = descendant(in: view, identifier: "settings.version.label")
@@ -2654,6 +2751,26 @@ struct MetricCalculationsTests {
         view.setUpdateChecking(false)
         expectEqual(updateButton?.title ?? "", "检查更新", "update button title must restore default text after checking")
         expectTrue(updateButton?.isEnabled ?? false, "update button must be enabled after checking")
+
+        if let updateRow {
+            view.setUpdateResult(.upToDate)
+            view.layoutSubtreeIfNeeded()
+            let upToDateLabel: NSView? = descendant(in: updateRow, identifier: "update.state.upToDate")
+            expectTrue(upToDateLabel != nil, "upToDate label must be present")
+            if let label = upToDateLabel {
+                expectTrue(updateRow.bounds.contains(label.frame), "upToDate label must lie within update row bounds")
+            }
+
+            view.setUpdateResult(.updateAvailable("2.0.0"))
+            view.layoutSubtreeIfNeeded()
+            let availLabel: NSView? = descendant(in: updateRow, identifier: "update.state.available")
+            let dlBtn: NSView? = descendant(in: updateRow, identifier: "update.state.downloadButton")
+            expectTrue(availLabel != nil && dlBtn != nil, "available update views must be present")
+            if let availLabel, let dlBtn {
+                expectTrue(updateRow.bounds.contains(availLabel.frame), "available label must lie within update row bounds")
+                expectTrue(updateRow.bounds.contains(dlBtn.frame), "download button must lie within update row bounds")
+            }
+        }
     }
 
     private static func testPanelSessionReusedAcrossToggleCycles() {
