@@ -49,15 +49,13 @@ struct StatusItemIconSizingTests {
         expect(rendered?.image.size == geometry.canvasSize,
                "bitmap logical size must match layout")
 
-        if let renderedImage = rendered?.image,
-           let cgImage = renderedImage.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-            let bitmapRep = NSBitmapImageRep(cgImage: cgImage)
+        if let bitmapRep = rendered?.image.representations.compactMap({ $0 as? NSBitmapImageRep }).first {
             let memoryPixels = countVisibleAlphaPixels(in: geometry.memoryIconFrame, rep: bitmapRep, scale: 2)
             let totalMemoryPixels = geometry.memoryIconFrame.width * 2 * geometry.memoryIconFrame.height * 2
             let memoryCoverage = Double(memoryPixels) / Double(totalMemoryPixels)
 
-            expect(memoryCoverage > 0.05, "memory icon must contain visible pixels")
-            expect(memoryCoverage < 0.75, "memory icon must preserve transparent outline, not a solid block")
+            expect(memoryCoverage > 0.05, "memory icon must contain visible pixels (got \(memoryCoverage))")
+            expect(memoryCoverage < 0.75, "memory icon must preserve transparent outline, not a solid block (got \(memoryCoverage))")
 
             let hasVerticalOverlap = checkVerticalOverlapBetweenMemoryAndCpu(
                 memoryFrame: geometry.memoryIconFrame,
@@ -66,6 +64,8 @@ struct StatusItemIconSizingTests {
                 scale: 2
             )
             expect(!hasVerticalOverlap, "memory and CPU visible pixels must not overlap vertically")
+        } else {
+            expect(false, "rendered image must contain an NSBitmapImageRep representation")
         }
 
         finish()
