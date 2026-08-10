@@ -72,15 +72,16 @@ struct StatusItemIconSizingTests {
     }
 
     private static func countVisibleAlphaPixels(in frame: NSRect, rep: NSBitmapImageRep, scale: CGFloat) -> Int {
+        let totalHeight = rep.pixelsHigh
         let minX = Int(frame.minX * scale)
         let maxX = Int(frame.maxX * scale)
-        let minY = Int(frame.minY * scale)
-        let maxY = Int(frame.maxY * scale)
+        let minY = max(0, totalHeight - Int(frame.maxY * scale))
+        let maxY = min(totalHeight, totalHeight - Int(frame.minY * scale))
 
         var count = 0
         for x in minX..<maxX {
             for y in minY..<maxY {
-                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.3 {
+                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.1 {
                     count += 1
                 }
             }
@@ -94,36 +95,38 @@ struct StatusItemIconSizingTests {
         rep: NSBitmapImageRep,
         scale: CGFloat
     ) -> Bool {
-        let minX = Int(memoryFrame.minX * scale)
-        let maxX = Int(memoryFrame.maxX * scale)
+        let totalHeight = rep.pixelsHigh
 
-        let memoryMinY = Int(memoryFrame.minY * scale)
-        let memoryMaxY = Int(memoryFrame.maxY * scale)
+        let memoryMinX = Int(memoryFrame.minX * scale)
+        let memoryMaxX = Int(memoryFrame.maxX * scale)
+        let memoryMinY = max(0, totalHeight - Int(memoryFrame.maxY * scale))
+        let memoryMaxY = min(totalHeight, totalHeight - Int(memoryFrame.minY * scale))
 
-        let cpuMinY = Int(cpuFrame.minY * scale)
-        let cpuMaxY = Int(cpuFrame.maxY * scale)
+        let cpuMinX = Int(cpuFrame.minX * scale)
+        let cpuMaxX = Int(cpuFrame.maxX * scale)
+        let cpuMinY = max(0, totalHeight - Int(cpuFrame.maxY * scale))
+        let cpuMaxY = min(totalHeight, totalHeight - Int(cpuFrame.minY * scale))
 
-        var memoryLowestY = Int.max
-        var cpuHighestY = Int.min
+        var memoryActiveY = Set<Int>()
+        var cpuActiveY = Set<Int>()
 
-        for x in minX..<maxX {
+        for x in memoryMinX..<memoryMaxX {
             for y in memoryMinY..<memoryMaxY {
                 if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.1 {
-                    memoryLowestY = min(memoryLowestY, y)
+                    memoryActiveY.insert(y)
                 }
             }
+        }
+
+        for x in cpuMinX..<cpuMaxX {
             for y in cpuMinY..<cpuMaxY {
                 if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.1 {
-                    cpuHighestY = max(cpuHighestY, y)
+                    cpuActiveY.insert(y)
                 }
             }
         }
 
-        if memoryLowestY == Int.max || cpuHighestY == Int.min {
-            return false
-        }
-
-        return memoryLowestY < cpuHighestY
+        return !memoryActiveY.intersection(cpuActiveY).isEmpty
     }
 
     private static func makePulseSnapshot() -> PulseSnapshot {
