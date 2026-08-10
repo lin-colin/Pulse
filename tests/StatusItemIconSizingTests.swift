@@ -103,23 +103,27 @@ struct StatusItemIconSizingTests {
         let cpuMinY = Int(cpuFrame.minY * scale)
         let cpuMaxY = Int(cpuFrame.maxY * scale)
 
-        var memoryActiveY = Set<Int>()
-        var cpuActiveY = Set<Int>()
+        var memoryLowestY = Int.max
+        var cpuHighestY = Int.min
 
         for x in minX..<maxX {
             for y in memoryMinY..<memoryMaxY {
-                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.3 {
-                    memoryActiveY.insert(y)
+                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.1 {
+                    memoryLowestY = min(memoryLowestY, y)
                 }
             }
             for y in cpuMinY..<cpuMaxY {
-                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.3 {
-                    cpuActiveY.insert(y)
+                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.1 {
+                    cpuHighestY = max(cpuHighestY, y)
                 }
             }
         }
 
-        return !memoryActiveY.intersection(cpuActiveY).isEmpty
+        if memoryLowestY == Int.max || cpuHighestY == Int.min {
+            return false
+        }
+
+        return memoryLowestY < cpuHighestY
     }
 
     private static func makePulseSnapshot() -> PulseSnapshot {
