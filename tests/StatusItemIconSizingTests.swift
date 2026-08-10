@@ -126,7 +126,7 @@ struct StatusItemIconSizingTests {
             }
         }
 
-        return !memoryActiveY.intersection(cpuActiveY).isEmpty
+        return memoryActiveY.intersection(cpuActiveY).count > 1
     }
 
     private static func makePulseSnapshot() -> PulseSnapshot {
