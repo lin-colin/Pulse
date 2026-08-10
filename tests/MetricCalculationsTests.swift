@@ -1537,7 +1537,7 @@ struct MetricCalculationsTests {
         let groups: [NSBox] = ["group.metrics", "group.controls", "group.quit"].compactMap {
             descendant(in: view, identifier: $0)
         }
-        let fills = groups.compactMap(\.fillColor)
+        let fills = groups.map(\.fillColor)
         expectTrue(
             fills.count == 3 && fills.dropFirst().allSatisfy { $0.isEqual(fills[0]) },
             "all groups should share one semantic grouped fill"
@@ -1908,9 +1908,9 @@ struct MetricCalculationsTests {
         }
 
         // 尝试更改所有阈值输入框为有效数值
-        let orangeInputs = allDescendants(in: view).compactMap { $0 as? NSTextField }
+        let orangeInputs = allDescendants(in: view).compactMap { $0 as? NumericInputView }
             .filter { $0.identifier?.rawValue.hasSuffix(".orangeInput") == true }
-        let redInputs = allDescendants(in: view).compactMap { $0 as? NSTextField }
+        let redInputs = allDescendants(in: view).compactMap { $0 as? NumericInputView }
             .filter { $0.identifier?.rawValue.hasSuffix(".redInput") == true }
 
         expectEqual(Double(orangeInputs.count), 3, "should find three orange input fields")
@@ -1918,9 +1918,7 @@ struct MetricCalculationsTests {
 
         for input in orangeInputs + redInputs {
             input.stringValue = "50"
-            if let action = input.action, let target = input.target {
-                NSApp.sendAction(action, to: target, from: input)
-            }
+            input.onTextChange?()
         }
 
         expectEqual(Double(callbackCount), 6, "every valid field edit should trigger threshold config update")
@@ -1929,9 +1927,7 @@ struct MetricCalculationsTests {
         // 设置无效输入清空文本框不应触发回调
         if let firstInput = orangeInputs.first {
             firstInput.stringValue = ""
-            if let action = firstInput.action, let target = firstInput.target {
-                NSApp.sendAction(action, to: target, from: firstInput)
-            }
+            firstInput.onTextChange?()
             expectEqual(Double(callbackCount), 6, "invalid incomplete input must not trigger callback")
         }
     }
@@ -2589,7 +2585,7 @@ struct MetricCalculationsTests {
         }
         expectEqual(Double(fieldContainers.count), 6, "each threshold must use one value-plus-unit field")
 
-        let inputs = allDescendants(in: view).compactMap { $0 as? NSTextField }.filter {
+        let inputs = allDescendants(in: view).compactMap { $0 as? NumericInputView }.filter {
             let id = $0.identifier?.rawValue ?? ""
             return id.hasSuffix(".orangeInput") || id.hasSuffix(".redInput")
         }
@@ -2599,8 +2595,8 @@ struct MetricCalculationsTests {
         expectFalse(visibleText.contains("变橙"), "matrix must remove repeated orange labels")
         expectFalse(visibleText.contains("变红"), "matrix must remove repeated red labels")
         expectTrue(visibleText.contains("告警阈值"), "matrix header must name the edited values")
-        expectTrue(visibleText.contains("提醒"), "matrix header must name the reminder column")
-        expectTrue(visibleText.contains("严重"), "matrix header must name the critical column")
+        expectTrue(visibleText.contains(where: { $0.contains("提醒") }), "matrix header must name the reminder column")
+        expectTrue(visibleText.contains(where: { $0.contains("严重") }), "matrix header must name the critical column")
         expectTrue(
             visibleText.contains("内存压力由 macOS 系统管理，无需设置阈值"),
             "memory pressure must be concise non-editable information"
@@ -2656,7 +2652,7 @@ struct MetricCalculationsTests {
             "settings.section.1.orangeInput", "settings.section.1.redInput",
             "settings.section.2.orangeInput", "settings.section.2.redInput",
         ]
-        let inputs: [NSTextField] = ids.compactMap { descendant(in: view, identifier: $0) }
+        let inputs: [NumericInputView] = ids.compactMap { descendant(in: view, identifier: $0) }
         expectEqual(Double(inputs.count), 6, "all threshold inputs must be keyboard reachable")
 
         let expectedLabels = [
@@ -2683,10 +2679,10 @@ struct MetricCalculationsTests {
         view.layoutSubtreeIfNeeded()
 
         window.makeFirstResponder(inputs[0])
-        expectTrue(window.firstResponder === inputs[0] || window.fieldEditor(false, for: inputs[0]) === window.firstResponder, "field 0 must accept focus")
+        expectTrue(window.firstResponder === inputs[0], "field 0 must accept focus")
 
         window.makeFirstResponder(inputs[1])
-        expectTrue(window.firstResponder === inputs[1] || window.fieldEditor(false, for: inputs[1]) === window.firstResponder, "field 1 must accept focus")
+        expectTrue(window.firstResponder === inputs[1], "field 1 must accept focus")
 
         window.makeFirstResponder(nil)
         expectTrue(window.firstResponder === window, "focus must clear cleanly when requested")
