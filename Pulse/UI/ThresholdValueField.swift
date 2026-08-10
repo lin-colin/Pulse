@@ -4,7 +4,7 @@ import AppKit
 /// macOS 对任何使用 NSTextField 的 App Bundle 都会拉起 AutoFill XPC 进程（~10MB），
 /// 即使设置 isAutomaticTextCompletionEnabled = false 也无法阻止。
 /// 自定义 NSView + keyDown 完全绕开 field editor 机制，从根本上消除 AutoFill 触发源。
-final class NumericInputView: NSView, NSAccessibilityStaticText {
+final class NumericInputView: NSView {
     var stringValue: String = "" {
         didSet {
             if stringValue != oldValue {
@@ -135,7 +135,7 @@ final class NumericInputView: NSView, NSAccessibilityStaticText {
 
     // MARK: - Accessibility
 
-    func accessibilityValue() -> String? { stringValue }
+    override func accessibilityValue() -> Any? { stringValue }
     override func accessibilityRole() -> NSAccessibility.Role? { .textField }
     override func isAccessibilityElement() -> Bool { true }
 
