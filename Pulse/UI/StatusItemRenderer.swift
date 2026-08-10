@@ -228,7 +228,8 @@ final class StatusItemRenderer: StatusItemRendering {
         let symbolSize = symbolImage.size
         let targetRect: NSRect
         if abs(frame.height - 12.0) < 0.1 && symbolSize.width > 0 && symbolSize.height > 0 {
-            let scale = min(frame.width / symbolSize.width, frame.height / symbolSize.height)
+            let maxHeight: CGFloat = 9.0
+            let scale = min(frame.width / symbolSize.width, maxHeight / symbolSize.height)
             let drawWidth = symbolSize.width * scale
             let drawHeight = symbolSize.height * scale
             let drawX = frame.minX + (frame.width - drawWidth) / 2.0
