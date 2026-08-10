@@ -72,7 +72,7 @@ struct StatusItemIconSizingTests {
     }
 
     private static func countVisibleAlphaPixels(in frame: NSRect, rep: NSBitmapImageRep, scale: CGFloat) -> Int {
-        let totalHeight = rep.pixelsHigh
+        let totalHeight = Int(round(22.0 * scale))
         let minX = Int(frame.minX * scale)
         let maxX = Int(frame.maxX * scale)
         let minY = max(0, totalHeight - Int(frame.maxY * scale))
@@ -95,7 +95,7 @@ struct StatusItemIconSizingTests {
         rep: NSBitmapImageRep,
         scale: CGFloat
     ) -> Bool {
-        let totalHeight = rep.pixelsHigh
+        let totalHeight = Int(round(22.0 * scale))
 
         let memoryMinX = Int(memoryFrame.minX * scale)
         let memoryMaxX = Int(memoryFrame.maxX * scale)
