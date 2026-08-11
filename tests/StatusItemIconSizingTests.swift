@@ -83,7 +83,7 @@ struct StatusItemIconSizingTests {
         var count = 0
         for x in minX..<maxX {
             for y in minY..<maxY {
-                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.1 {
+                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.35 {
                     count += 1
                 }
             }
@@ -114,7 +114,7 @@ struct StatusItemIconSizingTests {
 
         for x in memoryMinX..<memoryMaxX {
             for y in memoryMinY..<memoryMaxY {
-                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.1 {
+                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.35 {
                     memoryActiveY.insert(y)
                 }
             }
@@ -122,7 +122,7 @@ struct StatusItemIconSizingTests {
 
         for x in cpuMinX..<cpuMaxX {
             for y in cpuMinY..<cpuMaxY {
-                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.1 {
+                if let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.35 {
                     cpuActiveY.insert(y)
                 }
             }
