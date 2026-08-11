@@ -2089,8 +2089,8 @@ struct MetricCalculationsTests {
         }
 
         NSApp.sendAction(action, to: target, from: moreButton)
-        expectEqual(Double(requestedHeight ?? -1), 586.0, "expansion must request the full panel height")
-        view.frame.size.height = 586
+        expectEqual(Double(requestedHeight ?? -1), 594.0, "expansion must request the full panel height")
+        view.frame.size.height = 594
         view.layoutSubtreeIfNeeded()
 
         NSApp.sendAction(action, to: target, from: moreButton)
@@ -2101,7 +2101,7 @@ struct MetricCalculationsTests {
         let updateRow: NSView? = descendant(in: view, identifier: "settings.update.row")
         expectEqual(
             Double(controlsGroup?.frame.height ?? -1),
-            308.0,
+            316.0,
             "controls card must remain expanded before the outer frame starts shrinking"
         )
         expectFalse(updateRow?.isHidden ?? true, "settings must remain visible at the start of collapse")
@@ -2611,30 +2611,30 @@ struct MetricCalculationsTests {
         if let moreButton, let action = moreButton.action, let target = moreButton.target {
             NSApp.sendAction(action, to: target, from: moreButton)
         }
-        expectEqual(Double(view.computeTotalHeight() - 398), 188.0, "settings contribution must be 188pt")
+        expectEqual(Double(view.computeTotalHeight() - 398), 196.0, "settings contribution must be 196pt")
         view.frame.size.height = view.computeTotalHeight()
         view.layoutSubtreeIfNeeded()
 
         let header: NSView? = descendant(in: view, identifier: "settings.threshold.header")
         let memoryNote: NSView? = descendant(in: view, identifier: "settings.memNote")
         let updateRow: NSView? = descendant(in: view, identifier: "settings.update.row")
-        expectEqual(Double(header?.frame.minY ?? -1), 164.0, "header Y must be 164pt")
+        expectEqual(Double(header?.frame.minY ?? -1), 172.0, "header Y must be 172pt")
         expectEqual(Double(header?.frame.height ?? -1), 24.0, "header height must be 24pt")
-        expectEqual(Double(memoryNote?.frame.minY ?? -1), 36.0, "memory note Y must be 36pt")
+        expectEqual(Double(memoryNote?.frame.minY ?? -1), 44.0, "memory note Y must be 44pt")
         expectEqual(Double(memoryNote?.frame.height ?? -1), 32.0, "memory note height must be 32pt")
         expectEqual(Double(updateRow?.frame.minY ?? -1), 0.0, "update row Y must be 0pt")
         expectEqual(Double(updateRow?.frame.height ?? -1), 36.0, "update row height must be 36pt")
 
-        for (index, expectedY) in [132.0, 100.0, 68.0].enumerated() {
+        for (index, expectedY) in [140.0, 108.0, 76.0].enumerated() {
             let section: NSView? = descendant(in: view, identifier: "settings.section.\(index)")
             let orangeField: NSView? = descendant(in: view, identifier: "settings.section.\(index).orangeField")
             let redField: NSView? = descendant(in: view, identifier: "settings.section.\(index).redField")
             expectEqual(Double(section?.frame.minY ?? -1), expectedY, "threshold row Y must match order")
             expectEqual(Double(section?.frame.height ?? -1), 32.0, "threshold row height must be 32pt")
-            expectEqual(Double(orangeField?.frame.minX ?? -1), 146.0, "reminder field X must be 146pt")
-            expectEqual(Double(redField?.frame.minX ?? -1), 226.0, "critical field X must be 226pt")
-            expectEqual(Double(orangeField?.frame.width ?? -1), 64.0, "reminder field width must be 64pt")
-            expectEqual(Double(redField?.frame.width ?? -1), 64.0, "critical field width must be 64pt")
+            expectEqual(Double(orangeField?.frame.minX ?? -1), 152.0, "reminder field X must be 152pt")
+            expectEqual(Double(redField?.frame.minX ?? -1), 236.0, "critical field X must be 236pt")
+            expectEqual(Double(orangeField?.frame.width ?? -1), 72.0, "reminder field width must be 72pt")
+            expectEqual(Double(redField?.frame.width ?? -1), 72.0, "critical field width must be 72pt")
             expectEqual(Double(orangeField?.frame.height ?? -1), 24.0, "reminder field height must be 24pt")
             expectEqual(Double(redField?.frame.height ?? -1), 24.0, "critical field height must be 24pt")
         }
@@ -2669,7 +2669,7 @@ struct MetricCalculationsTests {
         expectTrue(inputs.last?.nextKeyView === inputs.first, "Tab order must loop from last field back to first field")
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 340, height: 586),
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 594),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
@@ -2707,16 +2707,16 @@ struct MetricCalculationsTests {
         expectEqual(Double(separators.count), 5, "there must be exactly 5 settings separators")
 
         let separatorXs = separators.map(\.frame.minX)
-        expectTrue(separatorXs.allSatisfy { $0 == 38.0 }, "all 5 settings separators must share the exact same X coordinate of 38pt")
+        expectTrue(separatorXs.filter { $0 == 16.0 }.count == 4 && separatorXs.contains(0.0), "4 inset separators at 16pt X and 1 main separator at 0pt X")
 
         let separatorYs = separators.map(\.frame.minY).sorted(by: >)
         expectEqual(Double(separatorYs.count), 5, "5 separators count")
         if separatorYs.count == 5 {
-            expectEqual(Double(separatorYs[0]), 164.0, "separator 0 Y must be 164pt")
-            expectEqual(Double(separatorYs[1]), 132.0, "separator 1 Y must be 132pt")
-            expectEqual(Double(separatorYs[2]), 100.0, "separator 2 Y must be 100pt")
-            expectEqual(Double(separatorYs[3]), 68.0, "separator 3 Y must be 68pt")
-            expectEqual(Double(separatorYs[4]), 36.0, "separator 4 Y must be 36pt")
+            expectEqual(Double(separatorYs[0]), 172.0, "separator 0 Y must be 172pt")
+            expectEqual(Double(separatorYs[1]), 140.0, "separator 1 Y must be 140pt")
+            expectEqual(Double(separatorYs[2]), 108.0, "separator 2 Y must be 108pt")
+            expectEqual(Double(separatorYs[3]), 76.0, "separator 3 Y must be 76pt")
+            expectEqual(Double(separatorYs[4]), 44.0, "separator 4 Y must be 44pt")
         }
 
         let memNote: NSView? = descendant(in: view, identifier: "settings.memNote")

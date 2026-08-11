@@ -46,7 +46,7 @@ final class PopoverContentView: NSView {
         static let settingsThresholdRowHeight: CGFloat = 32
         static let settingsMemoryNoteHeight: CGFloat = 32
         static let settingsUpdateRowHeight: CGFloat = 36
-        static let settingsFieldSize = NSSize(width: 64, height: 24)
+        static let settingsFieldSize = NSSize(width: 72, height: 24)
     }
 
     private let metricsGroup = NSBox()
@@ -624,6 +624,15 @@ final class PopoverContentView: NSView {
         updateRow.addSubview(updateSpinner)
         controlsGroup.contentView?.addSubview(updateRow)
 
+        // 内凹浅色底板（用于将【告警阈值】分组归类包裹）
+        let insetCard = NSBox()
+        insetCard.boxType = .custom
+        insetCard.borderWidth = 0
+        insetCard.cornerRadius = 10
+        insetCard.fillColor = NSColor.labelColor.withAlphaComponent(0.04)
+        insetCard.identifier = NSUserInterfaceItemIdentifier("settings.insetCard")
+        controlsGroup.contentView?.addSubview(insetCard, positioned: .below, relativeTo: nil)
+
         // 分隔线（5 条分隔线）
         for i in 0..<5 {
             let sep = NSBox()
@@ -821,15 +830,19 @@ final class PopoverContentView: NSView {
         guard let contentView = controlsGroup.contentView else { return }
         let w = controlsGroup.bounds.width
         let settingsHeight = computeSettingsHeight()
-        // 为什么：设置内容保持完整几何并随可见高度整体下移，避免在收起途中侵入上方三个固定控制行。
         let yOffset = visibleHeight - settingsHeight
 
+        // 内凹卡片面板：包住【告警阈值】5 个设置视图
+        if let insetCard = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.insetCard" }) {
+            insetCard.frame = NSRect(x: 8, y: 44 + yOffset, width: w - 16, height: 156)
+        }
+
         if let header = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.threshold.header" }) {
-            header.frame = NSRect(x: 0, y: 164 + yOffset, width: w, height: Layout.settingsHeaderHeight)
+            header.frame = NSRect(x: 0, y: 172 + yOffset, width: w, height: Layout.settingsHeaderHeight)
             layoutThresholdHeader(header)
         }
 
-        let sectionYPositions: [CGFloat] = [132, 100, 68]
+        let sectionYPositions: [CGFloat] = [140, 108, 76]
         let sections = contentView.subviews.filter {
             guard let id = $0.identifier?.rawValue else { return false }
             return id.hasPrefix("settings.section.") && id.split(separator: ".").count == 3
@@ -842,16 +855,19 @@ final class PopoverContentView: NSView {
             layoutThresholdSection(section)
         }
 
-        let separatorYPositions: [CGFloat] = [164, 132, 100, 68, 36]
+        let separatorYPositions: [CGFloat] = [172, 140, 108, 76, 44]
         let separators = contentView.subviews.filter { $0.identifier?.rawValue.hasPrefix("settings.separator.") == true }
         for (i, sep) in separators.enumerated() {
             guard i < separatorYPositions.count else { break }
             let y = separatorYPositions[i] + yOffset
-            layoutSeparator(sep, y: y, width: w)
+            // 内凹内部的分隔线收窄，底部主分隔线拉满
+            let sepWidth = (i == 4) ? w : w - 32
+            let sepX = (i == 4) ? 0 : CGFloat(16)
+            sep.frame = NSRect(x: sepX, y: y, width: sepWidth, height: 1)
         }
 
         if let memNote = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.memNote" }) {
-            memNote.frame = NSRect(x: 0, y: 36 + yOffset, width: w, height: Layout.settingsMemoryNoteHeight)
+            memNote.frame = NSRect(x: 0, y: 44 + yOffset, width: w, height: Layout.settingsMemoryNoteHeight)
             layoutMemoryNote(memNote)
         }
 
@@ -865,17 +881,17 @@ final class PopoverContentView: NSView {
         if let title = header.subviews.first(where: { $0.identifier?.rawValue == "settings.threshold.header.title" }) {
             title.frame = NSRect(x: Layout.titleX, y: 3, width: 88, height: 18)
         }
-        // “● 提醒” 居中对齐到 orangeField 列（midX=178）
+        // “● 提醒” 居中对齐到 orangeField 列（midX=188）
         if let orangeLabel = header.subviews.first(where: { $0.identifier?.rawValue == "settings.threshold.header.orangeLabel" }) as? NSTextField {
             orangeLabel.sizeToFit()
             let labelW = ceil(orangeLabel.frame.width)
-            orangeLabel.frame = NSRect(x: 178 - labelW / 2, y: 3, width: labelW, height: 18)
+            orangeLabel.frame = NSRect(x: 188 - labelW / 2, y: 3, width: labelW, height: 18)
         }
-        // “● 严重” 居中对齐到 redField 列（midX=258）
+        // “● 严重” 居中对齐到 redField 列（midX=272）
         if let redLabel = header.subviews.first(where: { $0.identifier?.rawValue == "settings.threshold.header.redLabel" }) as? NSTextField {
             redLabel.sizeToFit()
             let labelW = ceil(redLabel.frame.width)
-            redLabel.frame = NSRect(x: 258 - labelW / 2, y: 3, width: labelW, height: 18)
+            redLabel.frame = NSRect(x: 272 - labelW / 2, y: 3, width: labelW, height: 18)
         }
     }
 
@@ -888,8 +904,9 @@ final class PopoverContentView: NSView {
 
         icon.frame = NSRect(x: 12, y: 8, width: 16, height: 16)
         title.frame = NSRect(x: 38, y: 7, width: 88, height: 18)
-        orangeField.frame = NSRect(x: 146, y: 4, width: Layout.settingsFieldSize.width, height: Layout.settingsFieldSize.height)
-        redField.frame = NSRect(x: 226, y: 4, width: Layout.settingsFieldSize.width, height: Layout.settingsFieldSize.height)
+        // 放大宽度为 72pt，与上方右边距 12pt 精准水平对齐
+        orangeField.frame = NSRect(x: 152, y: 4, width: Layout.settingsFieldSize.width, height: Layout.settingsFieldSize.height)
+        redField.frame = NSRect(x: 236, y: 4, width: Layout.settingsFieldSize.width, height: Layout.settingsFieldSize.height)
     }
 
     private func layoutMemoryNote(_ memNote: NSView) {
@@ -990,6 +1007,7 @@ final class PopoverContentView: NSView {
         Layout.settingsHeaderHeight
             + Layout.settingsThresholdRowHeight * 3
             + Layout.settingsMemoryNoteHeight
+            + 8 // 内凹面板与底部更新行的逻辑间距
             + Layout.settingsUpdateRowHeight
     }
 
