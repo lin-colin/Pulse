@@ -7,6 +7,8 @@ struct StatusItemIconSizingTests {
     private static var failures = 0
 
     static func main() {
+        _ = NSApplication.shared
+
         let renderer = StatusItemRenderer()
         let model = StatusItemRenderModel.make(
             snapshot: makePulseSnapshot(),
