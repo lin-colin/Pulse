@@ -55,27 +55,17 @@
 ⚡ 5.3 W  📊 9 %
 🌡 30.3 °C 🖥 38%
 ```
-<img width="149" height="39" alt="image" src="https://github.com/user-attachments/assets/6ba86ef4-1b11-4353-bb3b-2fcdb9f2139e" />
-<img width="135" height="39" alt="image" src="https://github.com/user-attachments/assets/840f73ff-6523-47c4-9c5d-ea973d26a896" />
+<img width="129" height="41" alt="image" src="https://github.com/user-attachments/assets/034e4075-4509-4d59-a5a6-cc001f4bef0a" />
+
 
 
 ### 原生详情面板 (Native Detail Panel)
 
 点击菜单栏图标即可展开详情面板：
 
-```text
-  ⚡ 系统负载    5.3 W
-  🌡 电池温度    30.3 °C
-  📊 内存压力    9 %
-  🖥 CPU 使用    38% (2.4 GHz)
-  🔌 充电状态    已连接电源
-  ┌─────────────────────────┐
-  │ 刷新间隔          2 秒 ↕ │
-  │ 开机自动启动          ●  │
-  └─────────────────────────┘
-  退出 Pulse                 ⌘Q
-```
-<img width="349" height="402" alt="image" src="https://github.com/user-attachments/assets/b2e95577-8ab7-4c3e-aa91-8bdb4df0f6eb" />
+<img width="350" height="403" alt="image" src="https://github.com/user-attachments/assets/eef137fb-6912-4d77-803d-0f73c67a334b" />
+<img width="348" height="603" alt="image" src="https://github.com/user-attachments/assets/a95084c1-2a61-441a-b27f-95c0b5b7bc73" />
+<img width="351" height="598" alt="image" src="https://github.com/user-attachments/assets/55e9a825-1c16-4088-a272-42c47b765192" />
 
 
 *详情面板支持点击外部自动隐藏、深色/浅色模式无缝切换。*
