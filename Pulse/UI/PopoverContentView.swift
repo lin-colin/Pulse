@@ -45,7 +45,7 @@ final class PopoverContentView: NSView {
         static let settingsHeaderHeight: CGFloat = 24
         static let settingsThresholdRowHeight: CGFloat = 32
         static let settingsMemoryNoteHeight: CGFloat = 32
-        static let settingsUpdateRowHeight: CGFloat = 36
+        static let settingsUpdateRowHeight: CGFloat = 32
         static let settingsFieldSize = NSSize(width: 72, height: 24)
     }
 
@@ -571,7 +571,8 @@ final class PopoverContentView: NSView {
         let memoryBackground = NSBox()
         memoryBackground.boxType = .custom
         memoryBackground.borderWidth = 0
-        memoryBackground.fillColor = NSColor.systemBlue.withAlphaComponent(0.05)
+        memoryBackground.cornerRadius = 10
+        memoryBackground.fillColor = NSColor.systemBlue.withAlphaComponent(0.06)
         memoryBackground.identifier = NSUserInterfaceItemIdentifier("settings.memNote.background")
 
         let memIcon = NSImageView()
@@ -633,8 +634,8 @@ final class PopoverContentView: NSView {
         insetCard.identifier = NSUserInterfaceItemIdentifier("settings.insetCard")
         controlsGroup.contentView?.addSubview(insetCard, positioned: .below, relativeTo: nil)
 
-        // 分隔线（5 条分隔线）
-        for i in 0..<5 {
+        // 分隔线（4 条内凹内部分隔线）
+        for i in 0..<4 {
             let sep = NSBox()
             sep.boxType = .separator
             sep.identifier = NSUserInterfaceItemIdentifier("settings.separator.\(i)")
@@ -834,15 +835,15 @@ final class PopoverContentView: NSView {
 
         // 内凹卡片面板：包住【告警阈值】5 个设置视图
         if let insetCard = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.insetCard" }) {
-            insetCard.frame = NSRect(x: 8, y: 44 + yOffset, width: w - 16, height: 156)
+            insetCard.frame = NSRect(x: 8, y: 40 + yOffset, width: w - 16, height: 152)
         }
 
         if let header = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.threshold.header" }) {
-            header.frame = NSRect(x: 0, y: 172 + yOffset, width: w, height: Layout.settingsHeaderHeight)
+            header.frame = NSRect(x: 0, y: 168 + yOffset, width: w, height: Layout.settingsHeaderHeight)
             layoutThresholdHeader(header)
         }
 
-        let sectionYPositions: [CGFloat] = [140, 108, 76]
+        let sectionYPositions: [CGFloat] = [136, 104, 72]
         let sections = contentView.subviews.filter {
             guard let id = $0.identifier?.rawValue else { return false }
             return id.hasPrefix("settings.section.") && id.split(separator: ".").count == 3
@@ -855,24 +856,21 @@ final class PopoverContentView: NSView {
             layoutThresholdSection(section)
         }
 
-        let separatorYPositions: [CGFloat] = [172, 140, 108, 76, 44]
+        let separatorYPositions: [CGFloat] = [168, 136, 104, 72]
         let separators = contentView.subviews.filter { $0.identifier?.rawValue.hasPrefix("settings.separator.") == true }
         for (i, sep) in separators.enumerated() {
             guard i < separatorYPositions.count else { break }
             let y = separatorYPositions[i] + yOffset
-            // 内凹内部的分隔线收窄，底部主分隔线拉满
-            let sepWidth = (i == 4) ? w : w - 32
-            let sepX = (i == 4) ? 0 : CGFloat(16)
-            sep.frame = NSRect(x: sepX, y: y, width: sepWidth, height: 1)
+            sep.frame = NSRect(x: 16, y: y, width: w - 32, height: 1)
         }
 
         if let memNote = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.memNote" }) {
-            memNote.frame = NSRect(x: 0, y: 44 + yOffset, width: w, height: Layout.settingsMemoryNoteHeight)
+            memNote.frame = NSRect(x: 0, y: 40 + yOffset, width: w, height: Layout.settingsMemoryNoteHeight)
             layoutMemoryNote(memNote)
         }
 
         if let updateRow = contentView.subviews.first(where: { $0.identifier?.rawValue == "settings.update.row" }) {
-            updateRow.frame = NSRect(x: 0, y: yOffset, width: w, height: Layout.settingsUpdateRowHeight)
+            updateRow.frame = NSRect(x: 0, y: 4 + yOffset, width: w, height: Layout.settingsUpdateRowHeight)
             layoutUpdateRow(updateRow)
         }
     }
@@ -912,7 +910,8 @@ final class PopoverContentView: NSView {
     private func layoutMemoryNote(_ memNote: NSView) {
         let w = memNote.bounds.width
         if let bg = memNote.subviews.first(where: { $0.identifier?.rawValue == "settings.memNote.background" }) {
-            bg.frame = memNote.bounds
+            // 背景仅收纳在内凹面板内部（x: 8, width: w - 16），不向两边外扩溢出
+            bg.frame = NSRect(x: 8, y: 0, width: max(0, w - 16), height: memNote.bounds.height)
         }
         if let icon = memNote.subviews.first(where: { $0.identifier?.rawValue == "settings.memNote.icon" }) {
             icon.frame = NSRect(x: 12, y: 8, width: 16, height: 16)
@@ -928,15 +927,15 @@ final class PopoverContentView: NSView {
         let buttonX = w - Layout.trailingInset - buttonW
 
         if let icon = updateRow.subviews.first(where: { $0.identifier?.rawValue == "settings.update.icon" }) {
-            icon.frame = NSRect(x: 12, y: 11.5, width: 16, height: 16)
+            icon.frame = NSRect(x: 12, y: 8.5, width: 16, height: 16)
         }
         if let versionLabel = updateRow.subviews.first(where: { $0.identifier?.rawValue == "settings.version.label" }) {
-            versionLabel.frame = NSRect(x: 38, y: 9, width: 120, height: 18)
+            versionLabel.frame = NSRect(x: 38, y: 7, width: 120, height: 18)
         }
         if let updateButton = updateRow.subviews.first(where: { $0.identifier?.rawValue == "settings.update.button" }) {
-            updateButton.frame = NSRect(x: buttonX, y: 8, width: buttonW, height: 20)
+            updateButton.frame = NSRect(x: buttonX, y: 6, width: buttonW, height: 20)
         }
-        updateSpinner.frame = NSRect(x: buttonX - 22, y: 10, width: 16, height: 16)
+        updateSpinner.frame = NSRect(x: buttonX - 22, y: 8.5, width: 16, height: 16)
     }
 
     // MARK: - Control Rows Layout (updated for 3 rows)
@@ -1007,8 +1006,9 @@ final class PopoverContentView: NSView {
         Layout.settingsHeaderHeight
             + Layout.settingsThresholdRowHeight * 3
             + Layout.settingsMemoryNoteHeight
-            + 8 // 内凹面板与底部更新行的逻辑间距
+            + 4 // 内凹面板与底部更新行的逻辑边距
             + Layout.settingsUpdateRowHeight
+            + 4 // 底部边距
     }
 
     private func visibleSettingsHeight() -> CGFloat {

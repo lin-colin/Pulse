@@ -2089,8 +2089,8 @@ struct MetricCalculationsTests {
         }
 
         NSApp.sendAction(action, to: target, from: moreButton)
-        expectEqual(Double(requestedHeight ?? -1), 594.0, "expansion must request the full panel height")
-        view.frame.size.height = 594
+        expectEqual(Double(requestedHeight ?? -1), 590.0, "expansion must request the full panel height")
+        view.frame.size.height = 590
         view.layoutSubtreeIfNeeded()
 
         NSApp.sendAction(action, to: target, from: moreButton)
@@ -2101,7 +2101,7 @@ struct MetricCalculationsTests {
         let updateRow: NSView? = descendant(in: view, identifier: "settings.update.row")
         expectEqual(
             Double(controlsGroup?.frame.height ?? -1),
-            316.0,
+            312.0,
             "controls card must remain expanded before the outer frame starts shrinking"
         )
         expectFalse(updateRow?.isHidden ?? true, "settings must remain visible at the start of collapse")
@@ -2611,21 +2611,21 @@ struct MetricCalculationsTests {
         if let moreButton, let action = moreButton.action, let target = moreButton.target {
             NSApp.sendAction(action, to: target, from: moreButton)
         }
-        expectEqual(Double(view.computeTotalHeight() - 398), 196.0, "settings contribution must be 196pt")
+        expectEqual(Double(view.computeTotalHeight() - 398), 192.0, "settings contribution must be 192pt")
         view.frame.size.height = view.computeTotalHeight()
         view.layoutSubtreeIfNeeded()
 
         let header: NSView? = descendant(in: view, identifier: "settings.threshold.header")
         let memoryNote: NSView? = descendant(in: view, identifier: "settings.memNote")
         let updateRow: NSView? = descendant(in: view, identifier: "settings.update.row")
-        expectEqual(Double(header?.frame.minY ?? -1), 172.0, "header Y must be 172pt")
+        expectEqual(Double(header?.frame.minY ?? -1), 168.0, "header Y must be 168pt")
         expectEqual(Double(header?.frame.height ?? -1), 24.0, "header height must be 24pt")
-        expectEqual(Double(memoryNote?.frame.minY ?? -1), 44.0, "memory note Y must be 44pt")
+        expectEqual(Double(memoryNote?.frame.minY ?? -1), 40.0, "memory note Y must be 40pt")
         expectEqual(Double(memoryNote?.frame.height ?? -1), 32.0, "memory note height must be 32pt")
-        expectEqual(Double(updateRow?.frame.minY ?? -1), 0.0, "update row Y must be 0pt")
-        expectEqual(Double(updateRow?.frame.height ?? -1), 36.0, "update row height must be 36pt")
+        expectEqual(Double(updateRow?.frame.minY ?? -1), 4.0, "update row Y must be 4pt")
+        expectEqual(Double(updateRow?.frame.height ?? -1), 32.0, "update row height must be 32pt")
 
-        for (index, expectedY) in [140.0, 108.0, 76.0].enumerated() {
+        for (index, expectedY) in [136.0, 104.0, 72.0].enumerated() {
             let section: NSView? = descendant(in: view, identifier: "settings.section.\(index)")
             let orangeField: NSView? = descendant(in: view, identifier: "settings.section.\(index).orangeField")
             let redField: NSView? = descendant(in: view, identifier: "settings.section.\(index).redField")
@@ -2669,7 +2669,7 @@ struct MetricCalculationsTests {
         expectTrue(inputs.last?.nextKeyView === inputs.first, "Tab order must loop from last field back to first field")
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 340, height: 594),
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 590),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
@@ -2704,19 +2704,18 @@ struct MetricCalculationsTests {
         let separators = allDescendants(in: view).filter {
             $0.identifier?.rawValue.hasPrefix("settings.separator.") == true
         }
-        expectEqual(Double(separators.count), 5, "there must be exactly 5 settings separators")
+        expectEqual(Double(separators.count), 4, "there must be exactly 4 settings separators")
 
         let separatorXs = separators.map(\.frame.minX)
-        expectTrue(separatorXs.filter { $0 == 16.0 }.count == 4 && separatorXs.contains(0.0), "4 inset separators at 16pt X and 1 main separator at 0pt X")
+        expectTrue(separatorXs.allSatisfy { $0 == 16.0 }, "all 4 inset separators must be 16pt X")
 
         let separatorYs = separators.map(\.frame.minY).sorted(by: >)
-        expectEqual(Double(separatorYs.count), 5, "5 separators count")
-        if separatorYs.count == 5 {
-            expectEqual(Double(separatorYs[0]), 172.0, "separator 0 Y must be 172pt")
-            expectEqual(Double(separatorYs[1]), 140.0, "separator 1 Y must be 140pt")
-            expectEqual(Double(separatorYs[2]), 108.0, "separator 2 Y must be 108pt")
-            expectEqual(Double(separatorYs[3]), 76.0, "separator 3 Y must be 76pt")
-            expectEqual(Double(separatorYs[4]), 44.0, "separator 4 Y must be 44pt")
+        expectEqual(Double(separatorYs.count), 4, "4 separators count")
+        if separatorYs.count == 4 {
+            expectEqual(Double(separatorYs[0]), 168.0, "separator 0 Y must be 168pt")
+            expectEqual(Double(separatorYs[1]), 136.0, "separator 1 Y must be 136pt")
+            expectEqual(Double(separatorYs[2]), 104.0, "separator 2 Y must be 104pt")
+            expectEqual(Double(separatorYs[3]), 72.0, "separator 3 Y must be 72pt")
         }
 
         let memNote: NSView? = descendant(in: view, identifier: "settings.memNote")
@@ -2730,7 +2729,7 @@ struct MetricCalculationsTests {
         let updateRow: NSView? = descendant(in: view, identifier: "settings.update.row")
         expectTrue(updateRow != nil, "settings update row should exist")
         if let updateRow {
-            expectEqual(Double(updateRow.frame.height), 36.0, "update row height must be 36pt")
+            expectEqual(Double(updateRow.frame.height), 32.0, "update row height must be 32pt")
         }
 
         let versionLabel: NSTextField? = descendant(in: view, identifier: "settings.version.label")

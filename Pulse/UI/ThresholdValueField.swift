@@ -261,7 +261,7 @@ final class ThresholdValueField: NSView {
         )
         unitLabel.frame = NSRect(
             x: inputView.frame.maxX + spacing - 2,
-            y: (bounds.height - 14) / 2,
+            y: 3.5,
             width: unitWidth,
             height: 14
         )
